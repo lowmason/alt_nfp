@@ -1,6 +1,6 @@
 # Project-specific exclusions
 data/
-output/idata.nc
+*.nc
 
 # Python
 __pycache__/
