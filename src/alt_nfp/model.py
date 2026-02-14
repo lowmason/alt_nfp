@@ -56,7 +56,7 @@ def build_model(
 
         mu_g = pm.Normal("mu_g", mu=0.001, sigma=0.005)
         phi = pm.Uniform("phi", lower=0.0, upper=0.99)
-        sigma_g = pm.HalfNormal("sigma_g", sigma=0.008)
+        sigma_g = pm.HalfNormal("sigma_g", sigma=0.005)
 
         eps_g = pm.Normal("eps_g", 0, 1, shape=T)
         g0 = mu_g + sigma_g * eps_g[0]
@@ -98,7 +98,7 @@ def build_model(
         phi_0 = pm.Normal("phi_0", mu=0.001, sigma=0.002)
         phi_1 = pm.Normal("phi_1", mu=0.5, sigma=0.5)
         phi_2 = pm.Normal("phi_2", mu=0.3, sigma=0.3)
-        sigma_bd = pm.HalfNormal("sigma_bd", sigma=0.002)
+        sigma_bd = pm.HalfNormal("sigma_bd", sigma=0.001)
 
         xi_bd = pm.Normal("xi_bd", 0, 1, shape=T)
 
@@ -137,7 +137,7 @@ def build_model(
         # =============================================================
 
         alpha_ces = pm.Normal("alpha_ces", 0, 0.005)
-        lambda_ces = pm.Normal("lambda_ces", 1.0, 0.25)
+        lambda_ces = pm.Normal("lambda_ces", 1.0, 0.15)
         sigma_ces_sa = pm.InverseGamma("sigma_ces_sa", alpha=3.0, beta=0.004)
         sigma_ces_nsa = pm.InverseGamma("sigma_ces_nsa", alpha=3.0, beta=0.004)
 
@@ -168,14 +168,14 @@ def build_model(
 
             # Per-provider measurement parameters
             alpha_p = pm.Normal(f"alpha_{name}", 0, 0.005)
-            lam_p = pm.Normal(f"lam_{name}", 1.0, 0.25)
+            lam_p = pm.Normal(f"lam_{name}", 1.0, 0.15)
             sigma_p = pm.InverseGamma(f"sigma_{name}", alpha=3.0, beta=0.004)
 
             mu_base = alpha_p + lam_p * g_cont_nsa[obs_idx]
 
             if cfg.error_model == "ar1":
                 # AR(1) measurement error (e.g. multi-establishment restructuring)
-                rho_p = pm.Uniform(f"rho_{name}", lower=0.0, upper=0.99)
+                rho_p = pm.Beta(f"rho_{name}", alpha=2, beta=3)
 
                 mu_cond = pt.concatenate(
                     [
