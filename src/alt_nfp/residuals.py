@@ -25,36 +25,53 @@ def plot_residuals(idata: az.InferenceData, data: dict) -> None:
     g_cont = idata.posterior["g_cont"].values.mean(axis=(0, 1))
     g_total_sa = idata.posterior["g_total_sa"].values.mean(axis=(0, 1))
     g_total_nsa = idata.posterior["g_total_nsa"].values.mean(axis=(0, 1))
-    seasonal = idata.posterior["seasonal"].values.mean(axis=(0, 1))
-    g_cont_nsa = g_cont + seasonal[data["month_of_year"]]
+    seasonal = idata.posterior["seasonal"].values.mean(axis=(0, 1))  # (T,)
+    g_cont_nsa = g_cont + seasonal
 
     alpha_ces = idata.posterior["alpha_ces"].values.flatten().mean()
     lambda_ces = idata.posterior["lambda_ces"].values.flatten().mean()
-    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.flatten().mean()
-    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.flatten().mean()
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.mean(axis=(0, 1))   # (3,)
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.mean(axis=(0, 1))  # (3,)
 
-    n_panels = 2 + len(pp_data) + 1  # CES SA, CES NSA, each PP, QCEW
+    # Count CES vintage panels (only vintages with data)
+    vintage_labels = ['1st print', '2nd print', 'Final']
+    vintage_colors = ['#ff7f0e', '#d62728', '#2ca02c']
+    ces_panels: list[tuple[str, str, np.ndarray, np.ndarray, float, str]] = []
+    for v in range(3):
+        g_sa_v = data['g_ces_sa_by_vintage'][v]
+        obs_sa = np.where(np.isfinite(g_sa_v))[0]
+        if len(obs_sa) > 0:
+            ces_panels.append((
+                f'CES SA ({vintage_labels[v]})', 'sa', g_sa_v,
+                obs_sa, sigma_ces_sa[v], vintage_colors[v],
+            ))
+        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
+        obs_nsa = np.where(np.isfinite(g_nsa_v))[0]
+        if len(obs_nsa) > 0:
+            ces_panels.append((
+                f'CES NSA ({vintage_labels[v]})', 'nsa', g_nsa_v,
+                obs_nsa, sigma_ces_nsa[v], vintage_colors[v],
+            ))
+
+    n_panels = len(ces_panels) + len(pp_data) + 1  # CES vintages + PPs + QCEW
     fig, axes = plt.subplots(n_panels, 1, figsize=(14, 3.2 * n_panels), sharex=True)
 
-    # --- CES SA ---
-    ax = axes[0]
-    idx_obs = data["ces_sa_obs"]
-    pred = alpha_ces + lambda_ces * g_total_sa[idx_obs]
-    resid = (data["g_ces_sa"][idx_obs] - pred) / sigma_ces_sa
-    ax.scatter(dates_arr[idx_obs], resid, s=8, c="darkorange", alpha=0.6)
-    _resid_lines(ax, "CES SA")
+    # --- CES vintage panels ---
+    for panel_i, (title, sa_or_nsa, g_v, obs_v, sig_v, clr) in enumerate(ces_panels):
+        ax = axes[panel_i]
+        if sa_or_nsa == 'sa':
+            pred = alpha_ces + lambda_ces * g_total_sa[obs_v]
+        else:
+            pred = alpha_ces + lambda_ces * g_total_nsa[obs_v]
+        resid = (g_v[obs_v] - pred) / sig_v
+        ax.scatter(dates_arr[obs_v], resid, s=8, c=clr, alpha=0.6)
+        _resid_lines(ax, title)
 
-    # --- CES NSA ---
-    ax = axes[1]
-    idx_obs = data["ces_nsa_obs"]
-    pred = alpha_ces + lambda_ces * g_total_nsa[idx_obs]
-    resid = (data["g_ces_nsa"][idx_obs] - pred) / sigma_ces_nsa
-    ax.scatter(dates_arr[idx_obs], resid, s=8, c="darkorange", alpha=0.6)
-    _resid_lines(ax, "CES NSA")
+    n_ces_panels = len(ces_panels)
 
     # --- Per-provider PP ---
     for p_idx, pp in enumerate(pp_data):
-        ax = axes[2 + p_idx]
+        ax = axes[n_ces_panels + p_idx]
         name = pp["config"].name.lower()
         idx_obs = pp["pp_obs"]
         alp_p = idata.posterior[f"alpha_{name}"].values.flatten().mean()

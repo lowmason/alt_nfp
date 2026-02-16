@@ -35,9 +35,13 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
     # Build var_names dynamically
     var_names = [
         "mu_g", "phi", "sigma_g",
+        "sigma_fourier",
         "phi_0", "phi_1", "phi_2", "sigma_bd",
         "alpha_ces", "lambda_ces", "sigma_ces_sa", "sigma_ces_nsa",
     ]
+    # Cyclical indicator loadings (phi_3) if present
+    if "phi_3" in idata.posterior:
+        var_names.append("phi_3")
     for pp in pp_data:
         name = pp["config"].name.lower()
         var_names.extend([f"alpha_{name}", f"lam_{name}", f"sigma_{name}"])
@@ -95,6 +99,19 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
         f"[{np.percentile(phi_2, 10):.3f}, {np.percentile(phi_2, 90):.3f}]"
     )
     print(f"  \u03c3_bd (innovation):  {sigma_bd.mean() * 100:.4f}%")
+
+    if "phi_3" in idata.posterior:
+        phi_3 = idata.posterior["phi_3"].values  # (chains, draws, n_cyclical)
+        cyclical_labels = ['claims', 'nfci', 'biz_apps']
+        n_cyc = phi_3.shape[-1]
+        for i in range(n_cyc):
+            v = phi_3[:, :, i].flatten()
+            lbl = cyclical_labels[i] if i < len(cyclical_labels) else f'cyc_{i}'
+            print(
+                f"  \u03c6_3[{lbl}]:  {v.mean():.3f}  "
+                f"[{np.percentile(v, 10):.3f}, {np.percentile(v, 90):.3f}]"
+            )
+
     print(
         f"  bd_t mean over sample: {bd_mean.mean() * 100:+.4f}%/mo "
         f"(annualised: {bd_mean.mean() * 12 * 100:+.2f}%)"
@@ -105,8 +122,8 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
 def _print_ces_summary(idata: az.InferenceData) -> None:
     a = idata.posterior["alpha_ces"].values.flatten()
     l = idata.posterior["lambda_ces"].values.flatten()
-    s_sa = idata.posterior["sigma_ces_sa"].values.flatten()
-    s_nsa = idata.posterior["sigma_ces_nsa"].values.flatten()
+    s_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, 3)
+    s_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, 3)
 
     print("\nCES observation parameters (vs QCEW anchor):")
     print(f"  \u03b1_ces  = {a.mean() * 100:+.4f}%/mo  (bias relative to true growth)")
@@ -114,7 +131,14 @@ def _print_ces_summary(idata: az.InferenceData) -> None:
         f"  \u03bb_ces  = {l.mean():.4f}  "
         f"[{np.percentile(l, 10):.4f}, {np.percentile(l, 90):.4f}]"
     )
-    print(f"  \u03c3_ces_sa  = {s_sa.mean() * 100:.3f}%  \u03c3_ces_nsa = {s_nsa.mean() * 100:.3f}%")
+    vintage_labels = ['1st', '2nd', 'Final']
+    for v in range(3):
+        sa_v = s_sa[:, :, v].flatten()
+        nsa_v = s_nsa[:, :, v].flatten()
+        print(
+            f"  \u03c3_ces_sa[{vintage_labels[v]}] = {sa_v.mean() * 100:.3f}%  "
+            f"\u03c3_ces_nsa[{vintage_labels[v]}] = {nsa_v.mean() * 100:.3f}%"
+        )
 
 
 def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
@@ -150,24 +174,41 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
     """Quantify each source's precision-weighted information contribution."""
     pp_data = data["pp_data"]
 
-    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.flatten().mean()
-    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.flatten().mean()
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, 3)
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, 3)
     lambda_ces = idata.posterior["lambda_ces"].values.flatten().mean()
 
-    prec_ces_sa = lambda_ces**2 / sigma_ces_sa**2
-    prec_ces_nsa = lambda_ces**2 / sigma_ces_nsa**2
     prec_qcew_m3 = 1.0 / SIGMA_QCEW_M3**2
     prec_qcew_m12 = 1.0 / SIGMA_QCEW_M12**2
 
-    n_ces_sa = len(data["ces_sa_obs"])
-    n_ces_nsa = len(data["ces_nsa_obs"])
     qcew_is_m3 = data["qcew_is_m3"]
     n_qcew_m3 = int(qcew_is_m3.sum())
     n_qcew_m12 = len(data["qcew_obs"]) - n_qcew_m3
-
-    total_prec_ces_sa = prec_ces_sa * n_ces_sa
-    total_prec_ces_nsa = prec_ces_nsa * n_ces_nsa
     total_prec_qcew = prec_qcew_m3 * n_qcew_m3 + prec_qcew_m12 * n_qcew_m12
+
+    # CES vintage-specific precision
+    vintage_labels = ['1st', '2nd', 'Final']
+    ces_rows: list[tuple[str, int, float, float]] = []
+    total_prec_ces = 0.0
+    for v in range(3):
+        g_sa_v = data['g_ces_sa_by_vintage'][v]
+        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
+        n_sa = int(np.sum(np.isfinite(g_sa_v)))
+        n_nsa = int(np.sum(np.isfinite(g_nsa_v)))
+
+        sig_sa_v = sigma_ces_sa[:, :, v].flatten().mean()
+        sig_nsa_v = sigma_ces_nsa[:, :, v].flatten().mean()
+
+        if n_sa > 0:
+            prec_sa = lambda_ces**2 / sig_sa_v**2
+            total_sa = prec_sa * n_sa
+            ces_rows.append((f"CES SA ({vintage_labels[v]})", n_sa, prec_sa, total_sa))
+            total_prec_ces += total_sa
+        if n_nsa > 0:
+            prec_nsa = lambda_ces**2 / sig_nsa_v**2
+            total_nsa = prec_nsa * n_nsa
+            ces_rows.append((f"CES NSA ({vintage_labels[v]})", n_nsa, prec_nsa, total_nsa))
+            total_prec_ces += total_nsa
 
     pp_rows: list[tuple[str, int, float, float]] = []
     total_prec_pp = 0.0
@@ -184,21 +225,21 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
         pp_rows.append((pp["name"], n_obs, prec_p, total_p))
         total_prec_pp += total_p
 
-    total_all = total_prec_ces_sa + total_prec_ces_nsa + total_prec_qcew + total_prec_pp
+    total_all = total_prec_ces + total_prec_qcew + total_prec_pp
 
     print("\n" + "=" * 72)
     print("DATA SOURCE CONTRIBUTION (precision-weighted)")
     print("=" * 72)
-    hdr = f"{'Source':<16} {'Obs':<8} {'Prec/obs':>12} {'Total prec':>14} {'Share':>8}"
+    hdr = f"{'Source':<20} {'Obs':<8} {'Prec/obs':>12} {'Total prec':>14} {'Share':>8}"
     print(hdr)
     print("-" * 72)
 
     def _row(nm: str, n: int, pp_obs: float, total: float) -> None:
         pct = 100.0 * total / total_all
-        print(f"{nm:<16} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%")
+        print(f"{nm:<20} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%")
 
-    _row("CES SA", n_ces_sa, prec_ces_sa, total_prec_ces_sa)
-    _row("CES NSA", n_ces_nsa, prec_ces_nsa, total_prec_ces_nsa)
+    for nm, n, pp_per, pp_tot in ces_rows:
+        _row(nm, n, pp_per, pp_tot)
     for nm, n, pp_per, pp_tot in pp_rows:
         _row(nm, n, pp_per, pp_tot)
     _row("QCEW (M3)", n_qcew_m3, prec_qcew_m3, prec_qcew_m3 * n_qcew_m3)

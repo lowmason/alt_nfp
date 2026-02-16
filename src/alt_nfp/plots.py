@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import OUTPUT_DIR
+from .config import N_HARMONICS, OUTPUT_DIR
 
 
 # =========================================================================
@@ -95,11 +95,32 @@ def plot_growth_and_seasonal(idata: az.InferenceData, data: dict) -> None:
     ax.legend(fontsize=8, loc="upper right")
     _year_axis(ax)
 
-    # --- Panel 4: Seasonal pattern ---
-    s_post = idata.posterior["seasonal"].values
-    s_mean = s_post.mean(axis=(0, 1))
-    s_lo = np.percentile(s_post, 10, axis=(0, 1))
-    s_hi = np.percentile(s_post, 90, axis=(0, 1))
+    # --- Panel 4: Seasonal pattern (current-year Fourier evaluation) ---
+    K = N_HARMONICS
+    fourier_post = idata.posterior['fourier_coefs_det'].values  # (chains, draws, n_years, 2K)
+    last_yr_coefs = fourier_post[:, :, -1, :]  # (chains, draws, 2K)
+
+    k_vals = np.arange(1, K + 1)
+    month_idx = np.arange(12)
+    cos_basis_12 = np.cos(2 * np.pi * k_vals * month_idx[:, None] / 12)  # (12, K)
+    sin_basis_12 = np.sin(2 * np.pi * k_vals * month_idx[:, None] / 12)  # (12, K)
+
+    # Evaluate seasonal for each posterior draw at each of the 12 months
+    A_last = last_yr_coefs[:, :, :K]   # (chains, draws, K)
+    B_last = last_yr_coefs[:, :, K:]   # (chains, draws, K)
+    # s_12: (chains, draws, 12)
+    s_12 = np.einsum('mk,cdl->cdm', cos_basis_12, A_last) \
+        + np.einsum('mk,cdl->cdm', sin_basis_12, B_last)
+    # Fix: use explicit loop for clarity since K dimension must contract
+    s_12 = np.zeros((*A_last.shape[:2], 12))
+    for m in range(12):
+        for k in range(K):
+            s_12[:, :, m] += A_last[:, :, k] * cos_basis_12[m, k] \
+                + B_last[:, :, k] * sin_basis_12[m, k]
+
+    s_mean = s_12.mean(axis=(0, 1))
+    s_lo = np.percentile(s_12, 10, axis=(0, 1))
+    s_hi = np.percentile(s_12, 90, axis=(0, 1))
 
     emp_seasonal = np.zeros(12)
     emp_counts = np.zeros(12)
@@ -116,7 +137,7 @@ def plot_growth_and_seasonal(idata: az.InferenceData, data: dict) -> None:
     x_pos = np.arange(12)
     width = 0.35
     ax.bar(x_pos - width / 2, pct(s_mean), width, color="steelblue", alpha=0.7,
-           label="Model estimate")
+           label="Model estimate (current year)")
     ax.bar(x_pos + width / 2, pct(emp_seasonal), width, color="darkorange", alpha=0.7,
            label="Empirical (CES NSA \u2212 SA)")
     ax.errorbar(x_pos - width / 2, pct(s_mean),
@@ -125,7 +146,7 @@ def plot_growth_and_seasonal(idata: az.InferenceData, data: dict) -> None:
     ax.set_xticklabels(month_labels)
     ax.axhline(0, color="k", lw=0.5, ls="--")
     ax.set_ylabel("Seasonal effect (%)")
-    ax.set_title("Estimated vs Empirical Monthly Seasonal Pattern")
+    ax.set_title("Estimated vs Empirical Monthly Seasonal Pattern (Current Year Fourier)")
     ax.legend(fontsize=8)
 
     plt.tight_layout()
@@ -202,9 +223,8 @@ def plot_reconstructed_index(idata: az.InferenceData, data: dict) -> None:
 
 
 def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
-    """Time-series of structural BD and covariate relationships."""
+    """Time-series of structural BD, covariate relationships, and decomposition."""
     dates = data["dates"]
-    dates_arr = np.array(dates)
     bd_post = idata.posterior["bd"].values  # (chains, draws, T)
     bd_mean = bd_post.mean(axis=(0, 1))
     bd_lo = np.percentile(bd_post, 10, axis=(0, 1))
@@ -213,7 +233,8 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
     birth_rate = data["birth_rate"]
     bd_qcew_lagged = data["bd_qcew_lagged"]
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 12))
+    n_panels = 4
+    fig, axes = plt.subplots(n_panels, 1, figsize=(14, 4 * n_panels))
 
     # Panel 1: bd_t time series
     ax = axes[0]
@@ -244,11 +265,58 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
     if bq_obs.any():
         ax.scatter(bd_qcew_lagged[bq_obs] * 100, bd_mean[bq_obs] * 100, s=8,
                    c="steelblue", alpha=0.6)
-        ax.set_xlabel(f"Lagged QCEW BD proxy (%)")
+        ax.set_xlabel("Lagged QCEW BD proxy (%)")
         ax.set_ylabel("bd_t (%/mo)")
         ax.set_title("BD Offset vs Lagged QCEW BD Proxy")
     else:
         ax.set_visible(False)
+
+    # Panel 4: BD covariate decomposition
+    ax = axes[3]
+    phi_0_m = idata.posterior["phi_0"].values.flatten().mean()
+    phi_1_m = idata.posterior["phi_1"].values.flatten().mean()
+    phi_2_m = idata.posterior["phi_2"].values.flatten().mean()
+
+    c_phi0 = np.full(len(dates), phi_0_m * 100)
+    c_phi1 = phi_1_m * data["birth_rate_c"] * 100
+    c_phi2 = phi_2_m * data["bd_qcew_c"] * 100
+
+    ax.plot(dates, c_phi0, lw=1.2, label="\u03c6\u2080 (intercept)", color="gray", ls="--")
+    ax.plot(dates, c_phi1, lw=1.2, label="\u03c6\u2081\u00b7birth_rate", color="#2ca02c")
+    ax.plot(dates, c_phi2, lw=1.2, label="\u03c6\u2082\u00b7QCEW_lag", color="#d62728")
+
+    # Cyclical contributions
+    cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']
+    cyclical_labels = ['claims', 'nfci', 'biz_apps']
+    cyclical_colors = ['#9467bd', '#ff7f0e', '#17becf']
+    if "phi_3" in idata.posterior:
+        phi_3_m = idata.posterior["phi_3"].values.mean(axis=(0, 1))  # (n_cyc,)
+        cyc_i = 0
+        for key, lbl, clr in zip(cyclical_keys, cyclical_labels, cyclical_colors, strict=False):
+            arr = data.get(key)
+            if arr is not None and np.any(arr != 0.0):
+                contrib = phi_3_m[cyc_i] * arr * 100
+                ax.plot(dates, contrib, lw=1.2, label=f"\u03c6\u2083\u00b7{lbl}", color=clr)
+                cyc_i += 1
+
+    # Residual (innovation)
+    xi_bd_m = (bd_mean * 100 - c_phi0 - c_phi1 - c_phi2)
+    # Subtract cyclical if present
+    if "phi_3" in idata.posterior:
+        cyc_i = 0
+        for key in cyclical_keys:
+            arr = data.get(key)
+            if arr is not None and np.any(arr != 0.0):
+                xi_bd_m = xi_bd_m - phi_3_m[cyc_i] * arr * 100
+                cyc_i += 1
+    ax.plot(dates, xi_bd_m, lw=0.8, alpha=0.5, label="\u03c3_bd\u00b7\u03be (residual)",
+            color="lightgray")
+
+    ax.axhline(0, color="k", lw=0.5, ls="--")
+    ax.set_ylabel("Contribution (%/mo)")
+    ax.set_title("BD Covariate Decomposition")
+    ax.legend(fontsize=7, loc="upper right", ncol=2)
+    _year_axis(ax)
 
     plt.tight_layout()
     fig.savefig(OUTPUT_DIR / "bd_diagnostics.png", dpi=150, bbox_inches="tight")

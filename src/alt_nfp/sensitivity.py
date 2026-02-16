@@ -97,13 +97,32 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
     specs: list[tuple[str, str, int | None, float, str]] = [
         ("\u03b1_ces (%/mo)", "alpha_ces", None, 100, ".4f"),
         ("\u03bb_ces", "lambda_ces", None, 1, ".4f"),
-        ("\u03c3_ces_sa (%)", "sigma_ces_sa", None, 100, ".3f"),
-        ("\u03c3_ces_nsa (%)", "sigma_ces_nsa", None, 100, ".3f"),
+    ]
+    # CES vintage-specific sigmas
+    vintage_labels = ['v1', 'v2', 'v3']
+    for v in range(3):
+        specs.append(
+            (f"\u03c3_ces_sa_{vintage_labels[v]} (%)", "sigma_ces_sa", v, 100, ".3f")
+        )
+        specs.append(
+            (f"\u03c3_ces_nsa_{vintage_labels[v]} (%)", "sigma_ces_nsa", v, 100, ".3f")
+        )
+    specs.extend([
         ("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"),
         ("\u03c6_1 (birth)", "phi_1", None, 1, ".3f"),
         ("\u03c6_2 (QCEW lag)", "phi_2", None, 1, ".3f"),
         ("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"),
-    ]
+    ])
+    # Cyclical indicator loadings (phi_3) if available
+    cyclical_labels = ['claims', 'nfci', 'biz_apps']
+    cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']
+    n_cyc = sum(
+        1 for k in cyclical_keys
+        if data.get(k) is not None and np.any(data[k] != 0.0)
+    )
+    for i in range(n_cyc):
+        lbl = cyclical_labels[i] if i < len(cyclical_labels) else f'cyc_{i}'
+        specs.append((f"\u03c6_3[{lbl}]", "phi_3", i, 1, ".3f"))
     for pp in data["pp_data"]:
         name = pp["config"].name.lower()
         label = pp["name"]
@@ -126,24 +145,40 @@ def _precision_shares(
     """Return ``{source: share}`` of total precision."""
     post = idata.posterior
     lam_ces = post["lambda_ces"].values.flatten().mean()
-    sig_ces_sa = post["sigma_ces_sa"].values.flatten().mean()
-    sig_ces_nsa = post["sigma_ces_nsa"].values.flatten().mean()
+    sig_ces_sa = post["sigma_ces_sa"].values     # (chains, draws, 3)
+    sig_ces_nsa = post["sigma_ces_nsa"].values   # (chains, draws, 3)
 
-    prec_ces_sa = lam_ces**2 / sig_ces_sa**2
-    prec_ces_nsa = lam_ces**2 / sig_ces_nsa**2
     prec_qcew_m3 = 1.0 / sigma_m3**2
     prec_qcew_m12 = 1.0 / sigma_m12**2
 
-    n_ces_sa = len(data["ces_sa_obs"])
-    n_ces_nsa = len(data["ces_nsa_obs"])
     n_qcew_m3 = int(data["qcew_is_m3"].sum())
     n_qcew_m12 = len(data["qcew_obs"]) - n_qcew_m3
-
-    total_ces_sa = prec_ces_sa * n_ces_sa
-    total_ces_nsa = prec_ces_nsa * n_ces_nsa
     total_qcew = prec_qcew_m3 * n_qcew_m3 + prec_qcew_m12 * n_qcew_m12
 
+    # CES vintage-specific precision
+    vintage_labels = ['1st', '2nd', 'Final']
     shares: dict[str, float] = {}
+    total_ces = 0.0
+    for v in range(3):
+        g_sa_v = data['g_ces_sa_by_vintage'][v]
+        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
+        n_sa = int(np.sum(np.isfinite(g_sa_v)))
+        n_nsa = int(np.sum(np.isfinite(g_nsa_v)))
+
+        sv_sa = sig_ces_sa[:, :, v].flatten().mean()
+        sv_nsa = sig_ces_nsa[:, :, v].flatten().mean()
+
+        if n_sa > 0:
+            prec_sa = lam_ces**2 / sv_sa**2
+            total_sa = prec_sa * n_sa
+            shares[f"CES SA ({vintage_labels[v]})"] = total_sa
+            total_ces += total_sa
+        if n_nsa > 0:
+            prec_nsa = lam_ces**2 / sv_nsa**2
+            total_nsa = prec_nsa * n_nsa
+            shares[f"CES NSA ({vintage_labels[v]})"] = total_nsa
+            total_ces += total_nsa
+
     total_pp = 0.0
     for pp in data["pp_data"]:
         name = pp["config"].name.lower()
@@ -158,12 +193,10 @@ def _precision_shares(
         shares[pp["name"]] = pp_total
         total_pp += pp_total
 
-    total_all = total_ces_sa + total_ces_nsa + total_qcew + total_pp
-    shares["CES SA"] = total_ces_sa / total_all
-    shares["CES NSA"] = total_ces_nsa / total_all
-    shares["QCEW"] = total_qcew / total_all
-    for pp in data["pp_data"]:
-        shares[pp["name"]] = shares[pp["name"]] / total_all
+    total_all = total_ces + total_qcew + total_pp
+    shares["QCEW"] = total_qcew
+    for key in shares:
+        shares[key] = shares[key] / total_all
 
     return shares
 

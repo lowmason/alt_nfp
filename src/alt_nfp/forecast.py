@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import BD_QCEW_LAG, OUTPUT_DIR
+from .config import BD_QCEW_LAG, N_HARMONICS, OUTPUT_DIR
 
 
 def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
@@ -24,7 +24,7 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
     mu_g_post = idata.posterior["mu_g"].values
     phi_post = idata.posterior["phi"].values
     sigma_g_post = idata.posterior["sigma_g"].values
-    seasonal_post = idata.posterior["seasonal"].values
+    fourier_post = idata.posterior["fourier_coefs_det"].values  # (chains, draws, n_years, 2K)
     g_cont_post = idata.posterior["g_cont"].values
     g_sa_post = idata.posterior["g_total_sa"].values
     g_nsa_post = idata.posterior["g_total_nsa"].values
@@ -92,9 +92,20 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
             + sigma_bd_post * eps_bd
         )
 
+        # Evaluate Fourier seasonal for this forecast month
         mi = forecast_month_idx[h]
+        K = N_HARMONICS
+        k_vals = np.arange(1, K + 1)
+        cos_val = np.cos(2 * np.pi * k_vals * mi / 12)  # (K,)
+        sin_val = np.sin(2 * np.pi * k_vals * mi / 12)  # (K,)
+
+        # Use last estimated year's coefficients for forecast
+        A_k = fourier_post[:, :, -1, :K]   # (chains, draws, K)
+        B_k = fourier_post[:, :, -1, K:]   # (chains, draws, K)
+        s_fwd = np.sum(A_k * cos_val + B_k * sin_val, axis=-1)  # (chains, draws)
+
         g_sa_fwd[:, :, h] = g_cont_fwd[:, :, h] + bd_fwd[:, :, h]
-        g_nsa_fwd[:, :, h] = g_cont_fwd[:, :, h] + seasonal_post[:, :, mi] + bd_fwd[:, :, h]
+        g_nsa_fwd[:, :, h] = g_cont_fwd[:, :, h] + s_fwd + bd_fwd[:, :, h]
 
     # --- Reconstruct index paths ---
     ces_sa_vals = levels["ces_sa_index"].to_numpy().astype(float)

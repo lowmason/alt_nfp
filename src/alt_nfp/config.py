@@ -26,6 +26,17 @@ SIGMA_QCEW_M12 = 0.0015  # ~0.15%/mo — retrospective UI months
 # QCEW publication lag in months (for structural BD error-correction term)
 BD_QCEW_LAG = 6
 
+# Fourier seasonal expansion: number of harmonics (K)
+N_HARMONICS = 4
+
+# Cyclical indicators for structural BD model (demand-side covariates)
+CYCLICAL_INDICATORS: list[dict] = [
+    {'name': 'claims', 'file': 'claims_weekly.csv', 'col': 'claims', 'freq': 'weekly'},
+    {'name': 'nfci', 'file': 'nfci.csv', 'col': 'nfci', 'freq': 'weekly'},
+    {'name': 'biz_apps', 'file': 'business_applications.csv', 'col': 'applications',
+     'freq': 'monthly'},
+]
+
 # Plot colours — one per provider, cycled if >7 providers
 PP_COLORS = [
     "#2ca02c",  # green

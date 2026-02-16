@@ -14,7 +14,7 @@ Payroll providers' client bases are systematically skewed toward small and mediu
 
 The Bayesian NFP nowcasting system extracts a latent employment growth signal from multiple noisy observed series — payroll provider continuing-units aggregates, official NFP releases, and lagged QCEW observations. Each series enters through a measurement equation with estimated bias, loading, and noise parameters. The model does not require any input to be representative; it learns each series's mapping to the latent state and weights accordingly.
 
-No major payroll provider has significant coverage of firms with 500+ employees. ADP serves large employers but offers pre-aggregated data better suited to dynamic factor models than our establishment-level state space framework, and its large firms are idiosyncratic. Per SUSB, firms with 500+ employees account for over half of private-sector employment — too large a share to leave unobserved. Per the 2022 Economic Census, firms with 500+ employees account for 36% of private employment.
+No major payroll provider has significant coverage of firms with 500+ employees. The largest national provider serves large employers but offers pre-aggregated data better suited to dynamic factor models than our establishment-level state space framework, and its large firms are idiosyncratic. Per SUSB, firms with 500+ employees account for over half of private-sector employment — too large a share to leave unobserved. Per the 2022 Economic Census, firms with 500+ employees account for 36% of private employment.
 
 We propose recruiting individual large firms to share historical and ongoing payroll microdata, processed into time series that enter the model as additional observed series. A structured convenience approach leveraging existing business relationships is the optimal recruitment strategy.
 
@@ -24,7 +24,7 @@ We propose recruiting individual large firms to share historical and ongoing pay
 
 ### 2.1 Payroll Provider Size Distribution
 
-Payroll processors primarily serve small and medium-sized businesses that outsource payroll functions. Our primary provider's client base is concentrated in the 1–49 employee range, with coverage falling well below QCEW benchmarks for establishments with 100+ employees. This is structural: large firms typically run in-house payroll or enterprise platforms (Workday, SAP) outside conventional provider partnerships.
+Payroll processors primarily serve small and medium-sized businesses that outsource payroll functions. Our primary provider's client base is concentrated in the 1–49 employee range, with coverage falling well below QCEW benchmarks for establishments with 100+ employees. This is structural: large firms typically run in-house payroll or enterprise HR/payroll platforms outside conventional provider partnerships.
 
 ### 2.2 Quantifying the Gap
 
@@ -189,7 +189,7 @@ Geography is a secondary priority at the national-level model stage but becomes 
 1.  **SUSB mapping:** Construct the industry × size matrix for firms with 500+ employees. Identify cells with the largest employment shares and weakest provider coverage.
 2.  **Relationship inventory:** Catalog existing client relationships intersecting priority cells. Engage internal contacts to assess receptivity.
 3.  **Exploratory conversations:** Initiate discussions through internal contacts, framing around the value proposition. Cross-organizational networks are a key resource for identifying and facilitating these conversations.
-4.  **Technical scoping:** For receptive firms, identify the payroll platform in use (Workday, SAP, Paycor/Paylocity/Paycom, or in-house). Engage internal staff with platform expertise to specify the extraction path and minimize firm-side burden.
+4.  **Technical scoping:** For receptive firms, identify the payroll platform in use (enterprise, mid-market, or in-house). Engage internal staff with platform expertise to specify the extraction path and minimize firm-side burden.
 5.  **Legal and data governance:** Execute templated data sharing agreements.
 6.  **Data onboarding:** Ingest historical backfill, validate against reference period and definitional requirements, construct the continuing-units growth series.
 7.  **Ongoing delivery:** Establish automated or semi-automated monthly data pipelines.

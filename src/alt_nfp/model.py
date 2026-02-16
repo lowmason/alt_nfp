@@ -11,7 +11,7 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 
-from .config import SIGMA_QCEW_M3, SIGMA_QCEW_M12
+from .config import N_HARMONICS, SIGMA_QCEW_M3, SIGMA_QCEW_M12
 
 
 def build_model(
@@ -75,19 +75,52 @@ def build_model(
         pm.Deterministic("g_cont", g_cont)
 
         # =============================================================
-        # Monthly seasonal (sum-to-zero, 11 free parameters)
+        # Fourier seasonal with annually-evolving amplitudes (GRW)
+        #
+        #   s_t = Σ_k [ A_k(y(t)) cos(2πk m(t)/12)
+        #             + B_k(y(t)) sin(2πk m(t)/12) ]
+        #
+        # A_k, B_k evolve as Gaussian random walks across years.
         # =============================================================
 
-        s_raw = pm.Normal("s_raw", 0, 0.015, shape=11)
-        s_all = pt.concatenate([s_raw, (-pt.sum(s_raw)).reshape((1,))])
-        s_t = s_all[month_of_year]
-        pm.Deterministic("seasonal", s_all)
+        K = N_HARMONICS
+        n_years = data['n_years']
+        year_of_obs = data['year_of_obs']
+
+        # Innovation std per harmonic (decreasing with k)
+        sigma_fourier = pm.HalfNormal(
+            'sigma_fourier',
+            sigma=0.005 / np.arange(1, K + 1),
+            shape=K,
+        )
+
+        # GRW on Fourier coefficients: shape (n_years, 2*K)
+        # Columns 0..K-1 are A_k, columns K..2K-1 are B_k
+        sigma_vec = pt.tile(sigma_fourier, 2)  # (2K,)
+        fourier_coefs = pm.GaussianRandomWalk(
+            'fourier_coefs',
+            sigma=sigma_vec,
+            init_dist=pm.Normal.dist(0, 0.015),
+            shape=(n_years, 2 * K),
+        )
+
+        # Evaluate seasonal at each observation t
+        k_vals = np.arange(1, K + 1)  # (K,)
+        cos_basis = pt.cos(2 * np.pi * k_vals * month_of_year[:, None] / 12)  # (T, K)
+        sin_basis = pt.sin(2 * np.pi * k_vals * month_of_year[:, None] / 12)  # (T, K)
+
+        A_t = fourier_coefs[year_of_obs, :K]   # (T, K)
+        B_t = fourier_coefs[year_of_obs, K:]   # (T, K)
+
+        s_t = pt.sum(A_t * cos_basis + B_t * sin_basis, axis=1)  # (T,)
+        pm.Deterministic('seasonal', s_t)            # per-obs seasonal value
+        pm.Deterministic('fourier_coefs_det', fourier_coefs)  # (n_years, 2K)
 
         # =============================================================
         # Structural birth/death offset
         #
-        #   bd_t = φ_0 + φ_1·birth_rate_c_t + φ_2·bd_qcew_c_{t-L}
-        #          + σ_bd · ξ_t
+        #   bd_t = φ_0 + φ_1·birth_rate_c + φ_2·bd_qcew_c
+        #          + φ_3 · X^cycle + σ_bd · ξ_t
         #
         # Covariates are centred so φ_0 ≈ mean BD at average covariate
         # values.  Where a covariate is unavailable (early sample or
@@ -108,6 +141,23 @@ def build_model(
             + phi_2 * pt.as_tensor_variable(data["bd_qcew_c"])
             + sigma_bd * xi_bd
         )
+
+        # Cyclical indicators (demand-side BD covariates)
+        cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']
+        cyclical_data = []
+        cyclical_names = []
+        for key in cyclical_keys:
+            arr = data.get(key)
+            if arr is not None and np.any(arr != 0.0):
+                cyclical_data.append(arr)
+                cyclical_names.append(key)
+
+        n_cyclical = len(cyclical_data)
+        if n_cyclical > 0:
+            phi_3 = pm.Normal('phi_3', mu=0, sigma=0.3, shape=n_cyclical)
+            for i, arr in enumerate(cyclical_data):
+                bd_t = bd_t + phi_3[i] * pt.as_tensor_variable(arr)
+
         pm.Deterministic("bd", bd_t)
 
         # =============================================================
@@ -133,28 +183,41 @@ def build_model(
         )
 
         # =============================================================
-        # CES likelihood
+        # CES likelihood — vintage-specific noise
+        #
+        # Shared α_CES and λ_CES across vintages.  Separate σ per
+        # vintage v ∈ {1, 2, 3} (first print, second print, final).
         # =============================================================
 
         alpha_ces = pm.Normal("alpha_ces", 0, 0.005)
         lambda_ces = pm.Normal("lambda_ces", 1.0, 0.15)
-        sigma_ces_sa = pm.InverseGamma("sigma_ces_sa", alpha=3.0, beta=0.004)
-        sigma_ces_nsa = pm.InverseGamma("sigma_ces_nsa", alpha=3.0, beta=0.004)
+        sigma_ces_sa = pm.InverseGamma(
+            "sigma_ces_sa", alpha=3.0, beta=0.004, shape=3
+        )
+        sigma_ces_nsa = pm.InverseGamma(
+            "sigma_ces_nsa", alpha=3.0, beta=0.004, shape=3
+        )
 
-        if len(data["ces_sa_obs"]) > 0:
-            pm.Normal(
-                "obs_ces_sa",
-                mu=alpha_ces + lambda_ces * g_total_sa[data["ces_sa_obs"]],
-                sigma=sigma_ces_sa,
-                observed=data["g_ces_sa"][data["ces_sa_obs"]],
-            )
-        if len(data["ces_nsa_obs"]) > 0:
-            pm.Normal(
-                "obs_ces_nsa",
-                mu=alpha_ces + lambda_ces * g_total_nsa[data["ces_nsa_obs"]],
-                sigma=sigma_ces_nsa,
-                observed=data["g_ces_nsa"][data["ces_nsa_obs"]],
-            )
+        for v in range(3):
+            g_sa_v = data['g_ces_sa_by_vintage'][v]
+            obs_v = np.where(np.isfinite(g_sa_v))[0]
+            if len(obs_v) > 0:
+                pm.Normal(
+                    f'obs_ces_sa_v{v + 1}',
+                    mu=alpha_ces + lambda_ces * g_total_sa[obs_v],
+                    sigma=sigma_ces_sa[v],
+                    observed=g_sa_v[obs_v],
+                )
+
+            g_nsa_v = data['g_ces_nsa_by_vintage'][v]
+            obs_v_nsa = np.where(np.isfinite(g_nsa_v))[0]
+            if len(obs_v_nsa) > 0:
+                pm.Normal(
+                    f'obs_ces_nsa_v{v + 1}',
+                    mu=alpha_ces + lambda_ces * g_total_nsa[obs_v_nsa],
+                    sigma=sigma_ces_nsa[v],
+                    observed=g_nsa_v[obs_v_nsa],
+                )
 
         # =============================================================
         # PP likelihoods — config-driven, per-provider

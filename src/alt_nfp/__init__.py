@@ -16,6 +16,11 @@ from .sampling import (
 )
 from .sensitivity import run_sensitivity
 
+# New data infrastructure (v4)
+from .lookups import INDUSTRY_HIERARCHY, QCEW_REVISIONS, CES_REVISIONS
+from .ingest import build_panel, validate_panel, PANEL_SCHEMA
+from .vintages import real_time_view, final_view, vintage_diff
+
 __all__ = [
     "BASE_DIR",
     "DATA_DIR",
@@ -31,4 +36,14 @@ __all__ = [
     "MEDIUM_SAMPLER_KWARGS",
     "run_backtest",
     "run_sensitivity",
+    # New data infrastructure
+    "INDUSTRY_HIERARCHY",
+    "QCEW_REVISIONS",
+    "CES_REVISIONS",
+    "build_panel",
+    "validate_panel",
+    "PANEL_SCHEMA",
+    "real_time_view",
+    "final_view",
+    "vintage_diff",
 ]

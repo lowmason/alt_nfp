@@ -50,8 +50,8 @@ alt_nfp/
 ├── src/alt_nfp/              # Core Python package
 │   ├── __init__.py           # Package exports
 │   ├── config.py             # ProviderConfig, PROVIDERS list, paths, constants
-│   ├── data.py               # load_data() — config-driven, with CES censoring support
-│   ├── model.py              # build_model() — AR(1) latent + structural BD + provider loop
+│   ├── data.py               # existing — legacy data loading
+│   ├── model.py              # existing — PyMC model
 │   ├── sampling.py           # sample_model() — nutpie/PyMC with preset configs
 │   ├── diagnostics.py        # Parameter summary, source contributions, divergences
 │   ├── checks.py             # Prior/posterior predictive checks, LOO-CV
@@ -59,12 +59,32 @@ alt_nfp/
 │   ├── plots.py              # Growth/seasonal, reconstructed index, BD diagnostics
 │   ├── forecast.py           # Forward simulation with structural BD propagation
 │   ├── backtest.py           # Nowcast backtest (CES-censoring experiment)
-│   └── sensitivity.py        # QCEW sigma sensitivity analysis
+│   ├── sensitivity.py        # QCEW sigma sensitivity analysis
+│   ├── lookups/              # Static reference tables
+│   │   ├── __init__.py
+│   │   ├── industry.py       # NAICS → supersector → domain hierarchy + CES series ID map
+│   │   ├── revision_schedules.py  # QCEW & CES vintage schedules + publication calendar
+│   │   └── geography.py      # placeholder for future geo hierarchy
+│   ├── ingest/               # Raw data → observation panel
+│   │   ├── __init__.py
+│   │   ├── base.py           # PANEL_SCHEMA, validate_panel
+│   │   ├── qcew.py           # QCEW ingestion (BLS API + historical parquet)
+│   │   ├── ces.py            # CES ingestion (BLS API + historical parquet)
+│   │   ├── payroll.py        # provider index ingestion
+│   │   └── panel.py          # build_panel, save/load
+│   └── vintages/             # Vintage views & evaluation
+│       ├── __init__.py
+│       ├── views.py          # real_time_view, final_view
+│       └── evaluation.py     # vintage_diff, noise multiplier builder
 ├── data/                     # Input CSV data (CES, QCEW, payroll provider indices)
+│   └── raw/                  # Historical revision data
+│       ├── vintages/         # Parquet files (QCEW/CES vintages, pub calendar)
+│       └── providers/        # Raw provider data by provider
+├── tests/                    # Test suite
+│   ├── test_lookups.py       # Industry hierarchy & revision schedule tests
+│   ├── test_ingest.py        # Panel validation & schema tests
+│   └── test_vintages.py      # Vintage view & evaluation tests
 ├── docs/                     # Methodology and evaluation documentation
-│   ├── methods.md            # Full model methodology (v2)
-│   ├── methods_results.md    # Gold-standard v2 results
-│   └── methods_evaluation.md # Model evaluation review
 ├── archive/                  # Earlier monolithic scripts (v1, v2)
 ├── output/                   # Generated results (InferenceData, plots)
 ├── pyproject.toml            # Project config, dependencies, tool settings

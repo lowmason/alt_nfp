@@ -13,6 +13,7 @@ import polars as pl
 
 from .config import (
     BD_QCEW_LAG,
+    CYCLICAL_INDICATORS,
     DATA_DIR,
     PP_COLORS,
     PROVIDERS,
@@ -97,6 +98,11 @@ def load_data(
     T = len(dates)
     month_of_year = np.array([d.month - 1 for d in dates], dtype=int)
 
+    # Year index for Fourier seasonal GRW: 0-based relative to first observation
+    year0 = dates[0].year
+    year_of_obs = np.array([d.year - year0 for d in dates], dtype=int)
+    n_years = int(year_of_obs.max()) + 1
+
     # CES
     g_ces_sa = growth["g_ces_sa"].to_numpy().astype(float)
     g_ces_nsa = growth["g_ces_nsa"].to_numpy().astype(float)
@@ -113,6 +119,43 @@ def load_data(
 
     ces_sa_obs = np.where(np.isfinite(g_ces_sa))[0]
     ces_nsa_obs = np.where(np.isfinite(g_ces_nsa))[0]
+
+    # ------------------------------------------------------------------
+    # CES vintage-specific data (v1=first print, v2=second, v3=final)
+    # ------------------------------------------------------------------
+    vintage_cols_sa = ['g_ces_sa_v1', 'g_ces_sa_v2', 'g_ces_sa_v3']
+    vintage_cols_nsa = ['g_ces_nsa_v1', 'g_ces_nsa_v2', 'g_ces_nsa_v3']
+    has_vintage = all(c in growth.columns for c in vintage_cols_sa + vintage_cols_nsa)
+
+    if has_vintage:
+        g_ces_sa_by_vintage = [
+            growth[c].to_numpy().astype(float) for c in vintage_cols_sa
+        ]
+        g_ces_nsa_by_vintage = [
+            growth[c].to_numpy().astype(float) for c in vintage_cols_nsa
+        ]
+        # Apply censoring to vintage data as well
+        if censor_ces_from is not None:
+            for v in range(3):
+                g_ces_sa_by_vintage[v] = g_ces_sa_by_vintage[v].copy()
+                g_ces_nsa_by_vintage[v] = g_ces_nsa_by_vintage[v].copy()
+                for i, d in enumerate(dates):
+                    if d >= censor_ces_from:
+                        g_ces_sa_by_vintage[v][i:] = np.nan
+                        g_ces_nsa_by_vintage[v][i:] = np.nan
+                        break
+    else:
+        # Fallback: treat existing CES as final vintage (v=3)
+        g_ces_sa_by_vintage = [
+            np.full(T, np.nan),  # v1 placeholder
+            np.full(T, np.nan),  # v2 placeholder
+            g_ces_sa.copy(),     # v3 = current data
+        ]
+        g_ces_nsa_by_vintage = [
+            np.full(T, np.nan),  # v1 placeholder
+            np.full(T, np.nan),  # v2 placeholder
+            g_ces_nsa.copy(),    # v3 = current data
+        ]
 
     # QCEW
     g_qcew = growth["g_qcew"].to_numpy().astype(float)
@@ -188,6 +231,11 @@ def load_data(
     bd_qcew_c = np.where(np.isfinite(bd_qcew_lagged), bd_qcew_lagged - bd_qcew_mean, 0.0)
 
     # ------------------------------------------------------------------
+    # Cyclical indicators (demand-side BD covariates)
+    # ------------------------------------------------------------------
+    cyclical = _load_cyclical_indicators(dates, T)
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     n_qcew_m3 = int(qcew_is_m3.sum())
@@ -215,6 +263,13 @@ def load_data(
         f"bd_qcew_lagged {n_bd_qcew} obs "
         f"(L={BD_QCEW_LAG}mo, mean={bd_qcew_mean * 100:.4f}%)"
     )
+    for key in ['claims_c', 'nfci_c', 'biz_apps_c']:
+        arr = cyclical.get(key)
+        if arr is not None:
+            n_obs = int(np.sum(np.isfinite(arr)))
+            print(f"  Cyclical {key}: {n_obs} obs")
+        else:
+            print(f"  Cyclical {key}: not available")
     print(f"  CES SA  mean growth: {np.nanmean(g_ces_sa) * 100:+.4f}%/mo")
     print(f"  CES NSA mean growth: {np.nanmean(g_ces_nsa) * 100:+.4f}%/mo")
     print(f"  QCEW    mean growth: {np.nanmean(g_qcew) * 100:+.4f}%/mo")
@@ -226,6 +281,8 @@ def load_data(
         dates=dates,
         T=T,
         month_of_year=month_of_year,
+        year_of_obs=year_of_obs,
+        n_years=n_years,
         g_ces_sa=g_ces_sa,
         ces_sa_obs=ces_sa_obs,
         g_ces_nsa=g_ces_nsa,
@@ -243,17 +300,92 @@ def load_data(
         bd_qcew_lagged=bd_qcew_lagged,
         bd_qcew_mean=bd_qcew_mean,
         bd_qcew_c=bd_qcew_c,
+        # CES vintage data
+        g_ces_sa_by_vintage=g_ces_sa_by_vintage,
+        g_ces_nsa_by_vintage=g_ces_nsa_by_vintage,
+        has_ces_vintage=has_vintage,
+        # Cyclical indicators
+        **cyclical,
     )
 
 
 def build_obs_sources(data: dict) -> dict:
     """Build ``{var_name: (label, observed_array)}`` used by predictive checks."""
-    sources: dict[str, tuple[str, np.ndarray]] = {
-        "obs_ces_sa": ("CES SA", data["g_ces_sa"][data["ces_sa_obs"]]),
-        "obs_ces_nsa": ("CES NSA", data["g_ces_nsa"][data["ces_nsa_obs"]]),
-        "obs_qcew": ("QCEW", data["g_qcew"][data["qcew_obs"]]),
-    }
+    sources: dict[str, tuple[str, np.ndarray]] = {}
+
+    # CES vintage-specific entries
+    vintage_labels = ['1st print', '2nd print', 'Final']
+    for v in range(3):
+        g_sa_v = data['g_ces_sa_by_vintage'][v]
+        obs_v = np.where(np.isfinite(g_sa_v))[0]
+        if len(obs_v) > 0:
+            sources[f'obs_ces_sa_v{v + 1}'] = (
+                f'CES SA ({vintage_labels[v]})', g_sa_v[obs_v]
+            )
+        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
+        obs_v_nsa = np.where(np.isfinite(g_nsa_v))[0]
+        if len(obs_v_nsa) > 0:
+            sources[f'obs_ces_nsa_v{v + 1}'] = (
+                f'CES NSA ({vintage_labels[v]})', g_nsa_v[obs_v_nsa]
+            )
+
+    sources["obs_qcew"] = ("QCEW", data["g_qcew"][data["qcew_obs"]])
     for pp in data["pp_data"]:
         name = pp["config"].name.lower()
         sources[f"obs_{name}"] = (pp["name"], pp["g_pp"][pp["pp_obs"]])
     return sources
+
+
+def _load_cyclical_indicators(dates: list, T: int) -> dict:
+    """Load cyclical indicator CSVs, align to model dates, and centre.
+
+    Returns a dict with keys like ``'claims_c'``, ``'nfci_c'``,
+    ``'biz_apps_c'`` mapping to centred numpy arrays of length *T*.
+    Missing files are gracefully skipped (value set to ``None``).
+    """
+    result: dict = {}
+
+    for spec in CYCLICAL_INDICATORS:
+        key = f"{spec['name']}_c"
+        fpath = DATA_DIR / spec['file']
+
+        if not fpath.exists():
+            result[key] = None
+            continue
+
+        try:
+            raw = pl.read_csv(str(fpath), try_parse_dates=True).sort('ref_date')
+        except Exception:
+            result[key] = None
+            continue
+
+        col = spec['col']
+        if col not in raw.columns:
+            result[key] = None
+            continue
+
+        if spec['freq'] == 'weekly':
+            # Aggregate weekly → monthly average
+            raw = raw.with_columns(
+                pl.col('ref_date').dt.truncate('1mo').alias('month')
+            )
+            monthly = raw.group_by('month').agg(
+                pl.col(col).mean().alias(col)
+            ).sort('month').rename({'month': 'ref_date'})
+        else:
+            monthly = raw.select(['ref_date', col])
+
+        # Align to model dates
+        cal = pl.DataFrame({'ref_date': dates})
+        joined = cal.join(monthly, on='ref_date', how='left')
+        arr = joined[col].to_numpy().astype(float)
+
+        # Centre
+        if np.any(np.isfinite(arr)):
+            mean_val = float(np.nanmean(arr))
+            arr_c = np.where(np.isfinite(arr), arr - mean_val, 0.0)
+            result[key] = arr_c
+        else:
+            result[key] = None
+
+    return result
