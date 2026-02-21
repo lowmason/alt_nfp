@@ -17,7 +17,7 @@ import polars as pl
 
 from ..config import DATA_DIR, PROVIDERS, ProviderConfig
 from .base import PANEL_SCHEMA, validate_panel
-from .ces import ingest_ces
+from .ces_national import ingest_ces_national
 from .payroll import ingest_provider
 from .qcew import ingest_qcew
 
@@ -43,7 +43,7 @@ def build_panel(
         If True, load from existing data/*.csv files with simplified
         single-vintage ingestion. Backward-compatible path.
     use_api : bool
-        If True (default), fetch current data from BLS API via eco-stats.
+        If True (default), fetch current data from BLS API.
     providers : list[ProviderConfig], optional
         Provider list. Defaults to PROVIDERS from config.
     start_year : int
@@ -70,13 +70,9 @@ def build_panel(
 
     parts: list[pl.DataFrame] = []
 
-    # CES ingestion
+    # CES National ingestion
     try:
-        ces_df = ingest_ces(
-            vintage_dir=vintage_dir,
-            start_year=start_year,
-            end_year=end_year,
-        ) if use_api else ingest_ces(
+        ces_df = ingest_ces_national(
             vintage_dir=vintage_dir,
             start_year=start_year,
             end_year=end_year,
@@ -84,7 +80,7 @@ def build_panel(
         if len(ces_df) > 0:
             parts.append(ces_df)
     except Exception as e:
-        logger.warning(f'CES ingestion failed: {e}')
+        logger.warning(f'CES National ingestion failed: {e}')
 
     # QCEW ingestion
     try:

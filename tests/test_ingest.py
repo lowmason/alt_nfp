@@ -119,7 +119,7 @@ class TestValidatePanel:
         parquet_path = tmp_path / 'ces_vintages.parquet'
         df.write_parquet(parquet_path)
 
-        from alt_nfp.ingest.ces import load_ces_vintages
+        from alt_nfp.ingest.ces_national import load_ces_vintages
 
         result = load_ces_vintages(parquet_path)
         assert len(result) > 0
