@@ -21,7 +21,7 @@ from alt_nfp.ingest.bls._programs import (
 )
 from alt_nfp.ingest.bls.ces_national import fetch_ces_national
 from alt_nfp.ingest.bls.ces_state import fetch_ces_state
-from alt_nfp.ingest.bls.qcew import fetch_qcew
+from alt_nfp.ingest.bls.qcew import fetch_qcew, fetch_qcew_with_geography
 
 __all__ = [
     'BLSHttpClient',
@@ -31,6 +31,7 @@ __all__ = [
     'fetch_ces_national',
     'fetch_ces_state',
     'fetch_qcew',
+    'fetch_qcew_with_geography',
     'get_program',
     'list_programs',
     'parse_series_id',

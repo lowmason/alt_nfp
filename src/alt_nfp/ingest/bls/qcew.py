@@ -13,12 +13,15 @@ counts by area, ownership, and industry.
 from __future__ import annotations
 
 import logging
+import re
 
 import polars as pl
 
 from ._http import BLSHttpClient
 
 logger = logging.getLogger(__name__)
+
+_STATE_AREA_RE = re.compile(r'^\d{2}000$')
 
 # QCEW CSV API industry codes.  The API uses its own code scheme:
 #   '10'   = Total, all industries
@@ -155,6 +158,129 @@ def fetch_qcew(
                             f'QCEW fetched: {year}Q{qtr} '
                             f'industry={industry} ({len(df)} rows)'
                         )
+
+        if not frames:
+            logger.warning('No QCEW data fetched for the requested parameters')
+            return pl.DataFrame()
+
+        return pl.concat(frames, how='diagonal_relaxed')
+    finally:
+        if own_client:
+            client.close()
+
+
+def fetch_qcew_with_geography(
+    years: list[int],
+    quarters: list[int] | None = None,
+    industries: list[str] | None = None,
+    ownership_code: str = '5',
+    include_national: bool = True,
+    include_states: bool = True,
+    state_fips_list: list[str] | None = None,
+    client: BLSHttpClient | None = None,
+) -> pl.DataFrame:
+    '''
+    Download QCEW data for national and/or state-level geographies.
+
+    Parameters
+    ----------
+    years : list[int]
+        Reference years.
+    quarters : list[int] or None
+        Quarters (1-4). Defaults to all four.
+    industries : list[str] or None
+        QCEW API industry codes. Defaults to all private-sector.
+    ownership_code : str
+        Ownership filter. Defaults to ``'5'`` (private).
+    include_national : bool
+        Include national (US000) rows. Defaults to ``True``.
+    include_states : bool
+        Include state-level rows. Defaults to ``True``.
+    state_fips_list : list[str] or None
+        Specific state FIPS to include. If ``None``, uses all from
+        :data:`~alt_nfp.lookups.geography.STATES`.
+    client : BLSHttpClient or None
+        Optional HTTP client.
+
+    Returns
+    -------
+    pl.DataFrame
+        Raw QCEW data with added ``geographic_type`` and ``geographic_code``
+        columns. National rows have ``geographic_type='national'`` and
+        ``geographic_code='US'``; state rows have ``geographic_type='state'``
+        and ``geographic_code`` set to the 2-digit state FIPS.
+    '''
+    if quarters is None:
+        quarters = [1, 2, 3, 4]
+    if industries is None:
+        industries = _DEFAULT_INDUSTRIES
+    if state_fips_list is None:
+        from alt_nfp.lookups.geography import STATES
+        state_fips_list = STATES
+
+    # Build set of valid state area_fips for fast lookup
+    state_areas = {f'{fips}000' for fips in state_fips_list}
+
+    own_client = client is None
+    if own_client:
+        client = BLSHttpClient()
+
+    try:
+        frames: list[pl.DataFrame] = []
+        for year in years:
+            for qtr in quarters:
+                for industry in industries:
+                    try:
+                        df = client.get_qcew_csv(year, qtr, industry)
+                    except Exception as e:
+                        logger.debug(
+                            f'QCEW fetch failed: {year}Q{qtr} '
+                            f'industry={industry}: {e}'
+                        )
+                        continue
+
+                    if len(df) == 0:
+                        continue
+
+                    # Cast to string for filtering
+                    if 'own_code' in df.columns:
+                        df = df.with_columns(pl.col('own_code').cast(pl.Utf8))
+                    if 'area_fips' in df.columns:
+                        df = df.with_columns(pl.col('area_fips').cast(pl.Utf8))
+
+                    # Filter by ownership
+                    df = df.filter(pl.col('own_code') == ownership_code)
+
+                    if len(df) == 0:
+                        continue
+
+                    # Split into national and state rows
+                    parts: list[pl.DataFrame] = []
+
+                    if include_national:
+                        nat = df.filter(pl.col('area_fips') == 'US000')
+                        if len(nat) > 0:
+                            nat = nat.with_columns(
+                                pl.lit('national').alias('geographic_type'),
+                                pl.lit('US').alias('geographic_code'),
+                            )
+                            parts.append(nat)
+
+                    if include_states:
+                        # State: area_fips matches XX000 pattern
+                        state_df = df.filter(
+                            pl.col('area_fips').is_in(list(state_areas))
+                        )
+                        if len(state_df) > 0:
+                            state_df = state_df.with_columns(
+                                pl.lit('state').alias('geographic_type'),
+                                pl.col('area_fips').str.slice(0, 2).alias('geographic_code'),
+                            )
+                            parts.append(state_df)
+
+                    if parts:
+                        combined = pl.concat(parts, how='diagonal_relaxed')
+                        frames.append(combined)
 
         if not frames:
             logger.warning('No QCEW data fetched for the requested parameters')

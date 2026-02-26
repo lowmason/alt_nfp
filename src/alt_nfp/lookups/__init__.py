@@ -1,11 +1,24 @@
-"""Static reference tables for BLS industry hierarchy and revision schedules."""
+"""Static reference tables for BLS industry hierarchy, revision schedules, and geography."""
 
+from .geography import (
+    DIVISION_NAMES,
+    FIPS_TO_DIVISION,
+    FIPS_TO_REGION,
+    GEOGRAPHY_HIERARCHY,
+    REGION_NAMES,
+    STATES,
+)
 from .industry import (
     CES_SERIES_MAP,
     INDUSTRY_HIERARCHY,
+    INDUSTRY_MAP,
+    IndustryEntry,
+    en_series_id,
+    en_series_id_for_state,
     get_domain_codes,
     get_sector_codes,
     get_supersector_codes,
+    qcew_to_sector,
     sector_to_supersector_idx,
     supersector_to_domain_idx,
 )
@@ -22,13 +35,24 @@ from .revision_schedules import (
 __all__ = [
     'CES_REVISIONS',
     'CES_SERIES_MAP',
+    'DIVISION_NAMES',
+    'INDUSTRY_MAP',
+    'IndustryEntry',
+    'FIPS_TO_DIVISION',
+    'FIPS_TO_REGION',
+    'GEOGRAPHY_HIERARCHY',
     'INDUSTRY_HIERARCHY',
     'PublicationCalendar',
     'QCEW_REVISIONS',
+    'REGION_NAMES',
     'RevisionSpec',
+    'STATES',
+    'en_series_id',
+    'en_series_id_for_state',
     'get_ces_vintage_date',
     'get_domain_codes',
     'get_noise_multiplier',
+    'qcew_to_sector',
     'get_qcew_vintage_date',
     'get_sector_codes',
     'get_supersector_codes',

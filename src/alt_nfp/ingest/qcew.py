@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from ..lookups.industry import get_sector_codes
+from ..lookups.industry import get_sector_codes, qcew_to_sector
 from ..lookups.revision_schedules import QCEW_REVISIONS
 from .base import PANEL_SCHEMA, QCEW_VINTAGE_SCHEMA
 from .bls import BLSHttpClient, fetch_qcew as bls_fetch_qcew
@@ -25,60 +25,20 @@ from .bls.qcew import QCEW_INDUSTRY_CODES
 
 logger = logging.getLogger(__name__)
 
-# Mapping from QCEW API industry codes to our simplified sector codes.
-# QCEW returns industry_code in its own format; we need to map to the
-# project's 2-digit NAICS sector codes from lookups/industry.py.
-_QCEW_TO_SECTOR: dict[str, str] = {
-    '1012': '21',  # Mining
-    '1013': '22',  # Utilities
-    '1021': '23',  # Construction
-    '1022': '31',  # Manufacturing (31-33)
-    '1023': '42',  # Wholesale Trade
-    '1024': '44',  # Retail Trade (44-45)
-    '1025': '48',  # Transportation and Warehousing (48-49)
-    '1026': '51',  # Information
-    '1027': '52',  # Finance and Insurance
-    '1028': '53',  # Real Estate
-    '1029': '54',  # Professional and Technical Services
-    '102A': '55',  # Management of Companies
-    '102B': '56',  # Administrative and Waste Services
-    '102C': '61',  # Educational Services
-    '102D': '62',  # Health Care and Social Assistance
-    '102E': '71',  # Arts, Entertainment, and Recreation
-    '102F': '72',  # Accommodation and Food Services
-    '102G': '81',  # Other Services
-}
-
-# Also map raw NAICS codes that may appear in the API response
-_NAICS_TO_SECTOR: dict[str, str] = {
-    '21': '21',
-    '22': '22',
-    '23': '23',
+# Canonical mapping: QCEW API code / raw NAICS code -> simplified 2-digit sector code.
+# Derived from lookups/industry.py; also includes range-notation NAICS codes that
+# may appear in raw API responses.
+_QCEW_SECTOR_MAP: dict[str, str] = {
+    **qcew_to_sector(),
     '31-33': '31',
-    '42': '42',
     '44-45': '44',
     '48-49': '48',
-    '51': '51',
-    '52': '52',
-    '53': '53',
-    '54': '54',
-    '55': '55',
-    '56': '56',
-    '61': '61',
-    '62': '62',
-    '71': '71',
-    '72': '72',
-    '81': '81',
 }
 
 
 def _map_industry_code(code: str) -> str | None:
     """Map a QCEW industry code to our simplified sector code."""
-    if code in _QCEW_TO_SECTOR:
-        return _QCEW_TO_SECTOR[code]
-    if code in _NAICS_TO_SECTOR:
-        return _NAICS_TO_SECTOR[code]
-    return None
+    return _QCEW_SECTOR_MAP.get(code)
 
 
 def fetch_qcew_current(

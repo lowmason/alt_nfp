@@ -1,4 +1,4 @@
-"""Tests for alt_nfp.lookups — industry hierarchy and revision schedules."""
+"""Tests for alt_nfp.lookups — industry hierarchy, revision schedules, and geography."""
 
 import numpy as np
 import pytest
@@ -6,11 +6,22 @@ import pytest
 from alt_nfp.lookups import (
     CES_REVISIONS,
     CES_SERIES_MAP,
+    DIVISION_NAMES,
+    FIPS_TO_DIVISION,
+    FIPS_TO_REGION,
+    GEOGRAPHY_HIERARCHY,
     INDUSTRY_HIERARCHY,
+    INDUSTRY_MAP,
+    IndustryEntry,
     QCEW_REVISIONS,
+    REGION_NAMES,
+    STATES,
+    en_series_id,
+    en_series_id_for_state,
     get_domain_codes,
     get_sector_codes,
     get_supersector_codes,
+    qcew_to_sector,
     sector_to_supersector_idx,
     supersector_to_domain_idx,
 )
@@ -152,3 +163,132 @@ class TestRevisionSchedules:
         )
         for i in range(1, len(ces_regular)):
             assert ces_regular[i].lag_months > ces_regular[i - 1].lag_months
+
+
+class TestGeography:
+    """Tests for Census Region and Division lookups."""
+
+    def test_states_count(self):
+        """52 entries: 50 states + DC + Puerto Rico."""
+        assert len(STATES) == 52
+
+    def test_all_fips_mapped_to_region(self):
+        """Every FIPS in STATES has a valid region code (1-4)."""
+        valid_regions = {'1', '2', '3', '4'}
+        for fips in STATES:
+            assert fips in FIPS_TO_REGION, f'FIPS {fips} missing from FIPS_TO_REGION'
+            assert FIPS_TO_REGION[fips] in valid_regions, (
+                f'FIPS {fips} has invalid region {FIPS_TO_REGION[fips]}'
+            )
+
+    def test_all_fips_mapped_to_division(self):
+        """Every FIPS in STATES has a valid division code (01-09)."""
+        valid_divisions = {'01', '02', '03', '04', '05', '06', '07', '08', '09'}
+        for fips in STATES:
+            assert fips in FIPS_TO_DIVISION, f'FIPS {fips} missing from FIPS_TO_DIVISION'
+            assert FIPS_TO_DIVISION[fips] in valid_divisions, (
+                f'FIPS {fips} has invalid division {FIPS_TO_DIVISION[fips]}'
+            )
+
+    def test_puerto_rico_assignment(self):
+        """Puerto Rico (72) → Region 3 (South), Division 05 (South Atlantic)."""
+        assert '72' in STATES
+        assert FIPS_TO_REGION['72'] == '3'
+        assert FIPS_TO_DIVISION['72'] == '05'
+
+    def test_region_names_complete(self):
+        """All 4 regions have names."""
+        assert len(REGION_NAMES) == 4
+        assert set(REGION_NAMES.keys()) == {'1', '2', '3', '4'}
+
+    def test_division_names_complete(self):
+        """All 9 divisions have names."""
+        assert len(DIVISION_NAMES) == 9
+        assert set(DIVISION_NAMES.keys()) == {
+            '01', '02', '03', '04', '05', '06', '07', '08', '09'
+        }
+
+    def test_geography_hierarchy_lazyframe(self):
+        """GEOGRAPHY_HIERARCHY LazyFrame collects with expected shape."""
+        df = GEOGRAPHY_HIERARCHY.collect()
+        assert df.height == 52
+        assert set(df.columns) == {
+            'state_fips', 'region_code', 'region_name',
+            'division_code', 'division_name',
+        }
+        assert df['state_fips'].null_count() == 0
+        assert df['region_code'].null_count() == 0
+        assert df['division_code'].null_count() == 0
+
+
+class TestIndustryMap:
+    """Tests for the CES-QCEW industry cross-mapping."""
+
+    def test_industry_map_has_all_levels(self):
+        """INDUSTRY_MAP contains domain, supersector, and sector entries."""
+        types = {e.industry_type for e in INDUSTRY_MAP}
+        assert types == {'domain', 'supersector', 'sector'}
+
+    def test_industry_map_domain_count(self):
+        """5 domain-level entries."""
+        domains = [e for e in INDUSTRY_MAP if e.industry_type == 'domain']
+        assert len(domains) == 5
+
+    def test_industry_map_supersector_count(self):
+        """11 supersector-level entries (10 private + government)."""
+        supersectors = [e for e in INDUSTRY_MAP if e.industry_type == 'supersector']
+        assert len(supersectors) == 11
+
+    def test_industry_map_sector_count(self):
+        """19 sector-level entries."""
+        sectors = [e for e in INDUSTRY_MAP if e.industry_type == 'sector']
+        assert len(sectors) == 19
+
+    def test_industry_entry_is_frozen(self):
+        """IndustryEntry instances are immutable."""
+        entry = INDUSTRY_MAP[0]
+        with pytest.raises(AttributeError):
+            entry.industry_code = 'XX'
+
+    def test_every_entry_has_qcew_naics(self):
+        """Every INDUSTRY_MAP entry has a non-empty qcew_naics."""
+        for entry in INDUSTRY_MAP:
+            assert entry.qcew_naics, f'{entry.industry_code} has empty qcew_naics'
+
+    def test_every_entry_has_ces_code(self):
+        """Every INDUSTRY_MAP entry has a 6-digit ces_code."""
+        for entry in INDUSTRY_MAP:
+            assert len(entry.ces_code) == 6, (
+                f'{entry.industry_code} ces_code {entry.ces_code!r} not 6 digits'
+            )
+
+    def test_qcew_to_sector_mapping(self):
+        """qcew_to_sector() returns expected mappings for known codes."""
+        mapping = qcew_to_sector()
+        assert mapping['1012'] == '21'   # Mining
+        assert mapping['1022'] == '31'   # Manufacturing
+        assert mapping['102F'] == '72'   # Accommodation
+        # Raw NAICS codes are also mapped
+        assert mapping['21'] == '21'
+        assert mapping['72'] == '72'
+
+    def test_en_series_id_format(self):
+        """EN series IDs have expected prefix and length."""
+        # Find the Total Non-Farm domain entry
+        total_nf = next(e for e in INDUSTRY_MAP if e.industry_code == '00')
+        sid = en_series_id(total_nf)
+        assert sid.startswith('EN'), f'EN series ID should start with EN: {sid}'
+        assert len(sid) == 17, f'EN series ID should be 17 chars: {sid}'
+
+    def test_en_series_id_for_state(self):
+        """State-level EN series ID embeds the state FIPS."""
+        total_nf = next(e for e in INDUSTRY_MAP if e.industry_code == '00')
+        sid = en_series_id_for_state(total_nf, '26')  # Michigan
+        assert '26000' in sid, f'State FIPS 26 should appear in EN series ID: {sid}'
+
+    def test_en_series_id_ownership(self):
+        """Private ownership parameter changes EN series ID."""
+        total_nf = next(e for e in INDUSTRY_MAP if e.industry_code == '00')
+        sid_all = en_series_id(total_nf, ownership='0')
+        sid_prv = en_series_id(total_nf, ownership='5')
+        assert sid_all != sid_prv, 'Different ownership should produce different IDs'

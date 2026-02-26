@@ -1,0 +1,236 @@
+"""Tests for new ingest modules: aggregate, tagger, releases."""
+
+from datetime import date
+from pathlib import Path
+
+import polars as pl
+import pytest
+
+from alt_nfp.ingest.aggregate import aggregate_geo
+from alt_nfp.ingest.releases import COMBINED_COLUMNS, COMBINED_SCHEMA, combine_estimates
+from alt_nfp.ingest.tagger import latest_vintage_lookup, tag_estimates
+
+
+class TestAggregateGeo:
+    """Tests for geographic aggregation."""
+
+    @pytest.fixture()
+    def state_df(self) -> pl.DataFrame:
+        """Create a test DataFrame with national + state rows."""
+        return pl.DataFrame({
+            'source': ['qcew'] * 5,
+            'seasonally_adjusted': [False] * 5,
+            'geographic_type': ['national', 'state', 'state', 'state', 'state'],
+            'geographic_code': ['US', '36', '34', '42', '06'],
+            'industry_type': ['supersector'] * 5,
+            'industry_code': ['30'] * 5,
+            'ref_date': [date(2020, 1, 12)] * 5,
+            'employment': [1000.0, 200.0, 150.0, 180.0, 400.0],
+        })
+
+    def test_adds_region_rows(self, state_df: pl.DataFrame):
+        result = aggregate_geo(state_df)
+        regions = result.filter(pl.col('geographic_type') == 'region')
+        assert regions.height > 0
+
+    def test_adds_division_rows(self, state_df: pl.DataFrame):
+        result = aggregate_geo(state_df)
+        divisions = result.filter(pl.col('geographic_type') == 'division')
+        assert divisions.height > 0
+
+    def test_preserves_national(self, state_df: pl.DataFrame):
+        result = aggregate_geo(state_df)
+        national = result.filter(pl.col('geographic_type') == 'national')
+        assert national.height == 1
+        assert national['employment'][0] == 1000.0
+
+    def test_preserves_state(self, state_df: pl.DataFrame):
+        result = aggregate_geo(state_df)
+        states = result.filter(pl.col('geographic_type') == 'state')
+        assert states.height == 4
+
+    def test_northeast_region_sums(self, state_df: pl.DataFrame):
+        # NY (36), NJ (34), PA (42) are all Region 1 (Northeast)
+        result = aggregate_geo(state_df)
+        ne_region = result.filter(
+            (pl.col('geographic_type') == 'region')
+            & (pl.col('geographic_code') == '1')
+        )
+        assert ne_region.height == 1
+        # 200 (NY) + 150 (NJ) + 180 (PA)
+        assert ne_region['employment'][0] == 530.0
+
+    def test_pacific_division(self, state_df: pl.DataFrame):
+        # CA (06) is Division 09 (Pacific)
+        result = aggregate_geo(state_df)
+        pacific = result.filter(
+            (pl.col('geographic_type') == 'division')
+            & (pl.col('geographic_code') == '09')
+        )
+        assert pacific.height == 1
+        assert pacific['employment'][0] == 400.0
+
+    def test_empty_state_df(self):
+        df = pl.DataFrame({
+            'source': ['qcew'],
+            'geographic_type': ['national'],
+            'geographic_code': ['US'],
+            'industry_type': ['supersector'],
+            'industry_code': ['30'],
+            'ref_date': [date(2020, 1, 12)],
+            'employment': [1000.0],
+        })
+        result = aggregate_geo(df)
+        # Only national row, no regions or divisions
+        assert result.filter(pl.col('geographic_type') == 'region').height == 0
+        assert result.filter(pl.col('geographic_type') == 'division').height == 0
+
+
+class TestLatestVintageLookup:
+    """Tests for vintage lookup aggregation."""
+
+    def test_max_per_ref_date(self):
+        vintage_df = pl.DataFrame({
+            'publication': ['ces', 'ces', 'ces'],
+            'ref_date': [date(2020, 1, 12)] * 3,
+            'vintage_date': [date(2020, 2, 7), date(2020, 3, 6), date(2020, 4, 3)],
+            'revision': [0, 1, 2],
+            'benchmark_revision': [0, 0, 0],
+        })
+        result = latest_vintage_lookup(vintage_df, 'ces')
+        assert result.height == 1
+        assert result['revision'][0] == 2
+        assert result['vintage_date'][0] == date(2020, 4, 3)
+
+    def test_filters_by_publication(self):
+        vintage_df = pl.DataFrame({
+            'publication': ['ces', 'sae'],
+            'ref_date': [date(2020, 1, 12)] * 2,
+            'vintage_date': [date(2020, 2, 7), date(2020, 3, 14)],
+            'revision': [0, 0],
+            'benchmark_revision': [0, 0],
+        })
+        result = latest_vintage_lookup(vintage_df, 'ces')
+        assert result.height == 1
+        assert result['vintage_date'][0] == date(2020, 2, 7)
+
+
+class TestTagEstimates:
+    """Tests for tagging estimates with vintage info."""
+
+    @pytest.fixture()
+    def vintage_dates_path(self, tmp_path: Path) -> Path:
+        vintage_df = pl.DataFrame({
+            'publication': ['ces', 'ces', 'ces', 'ces'],
+            'ref_date': [
+                date(2020, 1, 12), date(2020, 1, 12),
+                date(2020, 2, 12), date(2020, 2, 12),
+            ],
+            'vintage_date': [
+                date(2020, 2, 7), date(2020, 3, 6),
+                date(2020, 3, 6), date(2020, 4, 3),
+            ],
+            'revision': [0, 1, 0, 1],
+            'benchmark_revision': [0, 0, 0, 0],
+        })
+        path = tmp_path / 'vintage_dates.parquet'
+        vintage_df.write_parquet(path)
+        return path
+
+    def test_tags_are_joined(self, vintage_dates_path: Path):
+        estimates = pl.DataFrame({
+            'ref_date': [date(2020, 1, 12), date(2020, 2, 12)],
+            'employment': [100000.0, 100200.0],
+        })
+        result = tag_estimates(estimates, 'ces', vintage_dates_path)
+        assert 'vintage_date' in result.columns
+        assert 'revision' in result.columns
+        assert 'benchmark_revision' in result.columns
+        assert result['revision'].null_count() == 0
+
+    def test_replaces_existing_columns(self, vintage_dates_path: Path):
+        estimates = pl.DataFrame({
+            'ref_date': [date(2020, 1, 12)],
+            'employment': [100000.0],
+            'vintage_date': [date(1900, 1, 1)],
+            'revision': [99],
+            'benchmark_revision': [99],
+        })
+        result = tag_estimates(estimates, 'ces', vintage_dates_path)
+        assert result['revision'][0] != 99  # Should be replaced
+
+    def test_missing_file_raises(self, tmp_path: Path):
+        estimates = pl.DataFrame({'ref_date': [date(2020, 1, 12)]})
+        with pytest.raises(FileNotFoundError):
+            tag_estimates(estimates, 'ces', tmp_path / 'nonexistent.parquet')
+
+
+class TestCombineEstimates:
+    """Tests for combined releases output."""
+
+    @pytest.fixture()
+    def estimate_files(self, tmp_path: Path) -> tuple[Path, Path]:
+        qcew = pl.DataFrame({
+            'source': ['qcew'],
+            'seasonally_adjusted': [False],
+            'geographic_type': ['national'],
+            'geographic_code': ['US'],
+            'industry_type': ['supersector'],
+            'industry_code': ['30'],
+            'ref_date': [date(2020, 3, 12)],
+            'employment': [12000000.0],
+        })
+        ces = pl.DataFrame({
+            'source': ['ces'],
+            'seasonally_adjusted': [True],
+            'geographic_type': ['national'],
+            'geographic_code': ['US'],
+            'industry_type': ['supersector'],
+            'industry_code': ['30'],
+            'ref_date': [date(2020, 3, 12)],
+            'vintage_date': [date(2020, 4, 3)],
+            'revision': [0],
+            'benchmark_revision': [0],
+            'employment': [12100000.0],
+        })
+        qcew_path = tmp_path / 'qcew_estimates.parquet'
+        ces_path = tmp_path / 'ces_estimates.parquet'
+        qcew.write_parquet(qcew_path)
+        ces.write_parquet(ces_path)
+        return qcew_path, ces_path
+
+    def test_combines_files(self, estimate_files: tuple[Path, Path], tmp_path: Path):
+        qcew_path, ces_path = estimate_files
+        out = tmp_path / 'releases.parquet'
+        result = combine_estimates(qcew_path, ces_path, out_path=out)
+        assert result.height == 2
+        assert set(result.columns) == set(COMBINED_COLUMNS)
+
+    def test_writes_parquet(self, estimate_files: tuple[Path, Path], tmp_path: Path):
+        qcew_path, ces_path = estimate_files
+        out = tmp_path / 'releases.parquet'
+        combine_estimates(qcew_path, ces_path, out_path=out)
+        assert out.exists()
+        reloaded = pl.read_parquet(out)
+        assert reloaded.height == 2
+
+    def test_skips_missing_files(self, tmp_path: Path):
+        out = tmp_path / 'releases.parquet'
+        result = combine_estimates(
+            tmp_path / 'nonexistent.parquet',
+            out_path=out,
+        )
+        assert result.height == 0
+
+    def test_fills_missing_vintage_columns(
+        self, estimate_files: tuple[Path, Path], tmp_path: Path,
+    ):
+        qcew_path, ces_path = estimate_files
+        out = tmp_path / 'releases.parquet'
+        result = combine_estimates(qcew_path, ces_path, out_path=out)
+        # QCEW file didn't have vintage columns; they should be null
+        qcew_row = result.filter(pl.col('source') == 'qcew')
+        assert qcew_row['vintage_date'][0] is None
+        # CES file had vintage columns; they should be preserved
+        ces_row = result.filter(pl.col('source') == 'ces')
+        assert ces_row['vintage_date'][0] == date(2020, 4, 3)

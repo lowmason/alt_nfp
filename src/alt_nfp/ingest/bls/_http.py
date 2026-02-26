@@ -285,7 +285,8 @@ class BLSHttpClient:
         self,
         year: int,
         quarter: int,
-        industry: str,
+        slice_code: str,
+        slice_type: str = 'industry',
     ) -> pl.DataFrame:
         '''
         Download QCEW data from the CSV API.
@@ -296,21 +297,29 @@ class BLSHttpClient:
             Reference year.
         quarter : int
             Reference quarter (1-4).
-        industry : str
-            Industry code in QCEW API format (e.g., ``'10'``, ``'1011'``).
+        slice_code : str
+            Slice code: industry code (e.g., ``'10'``, ``'1011'``), area code
+            (e.g., ``'US000'``, ``'01000'``), or size code (e.g., ``'0'``).
+        slice_type : str
+            One of ``'industry'`` (default), ``'area'``, or ``'size'``.
 
         Returns
         -------
         pl.DataFrame
             Raw QCEW DataFrame parsed from the CSV response.
         '''
-        cache_key = f'qcew_{year}_{quarter}_{industry}.csv'
+        if slice_type not in ('industry', 'area', 'size'):
+            raise ValueError(
+                f'slice_type must be industry, area, or size; got {slice_type!r}'
+            )
+
+        cache_key = f'qcew_{year}_{quarter}_{slice_type}_{slice_code}.csv'
         cache_path = self._cache_path(cache_key)
 
         if self._is_cache_valid(cache_path):
             return pl.read_csv(cache_path)
 
-        url = f'{self.QCEW_CSV_BASE}/{year}/{quarter}/industry/{industry}.csv'
+        url = f'{self.QCEW_CSV_BASE}/{year}/{quarter}/{slice_type}/{slice_code}.csv'
         response = self.session.get(url, timeout=60)
         response.raise_for_status()
 
