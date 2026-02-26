@@ -28,6 +28,8 @@ def _make_panel_rows(n: int = 5, **overrides) -> list[dict]:
 
         row = {
             'period': period,
+            'geographic_type': 'national',
+            'geographic_code': 'US',
             'industry_code': '05',
             'industry_level': 'supersector',
             'source': 'ces_sa',

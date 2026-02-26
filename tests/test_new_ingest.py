@@ -1,4 +1,4 @@
-"""Tests for new ingest modules: aggregate, tagger, releases."""
+"""Tests for new ingest modules: aggregate, tagger, releases, state-level QCEW."""
 
 from datetime import date
 from pathlib import Path
@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from alt_nfp.ingest.aggregate import aggregate_geo
+from alt_nfp.ingest.base import PANEL_SCHEMA
 from alt_nfp.ingest.releases import COMBINED_COLUMNS, COMBINED_SCHEMA, combine_estimates
 from alt_nfp.ingest.tagger import latest_vintage_lookup, tag_estimates
 
@@ -234,3 +235,134 @@ class TestCombineEstimates:
         # CES file had vintage columns; they should be preserved
         ces_row = result.filter(pl.col('source') == 'ces')
         assert ces_row['vintage_date'][0] == date(2020, 4, 3)
+
+
+class TestPanelSchemaGeography:
+    """Tests that PANEL_SCHEMA includes geographic columns."""
+
+    def test_schema_has_geographic_columns(self):
+        assert 'geographic_type' in PANEL_SCHEMA
+        assert 'geographic_code' in PANEL_SCHEMA
+        assert PANEL_SCHEMA['geographic_type'] == pl.Utf8
+        assert PANEL_SCHEMA['geographic_code'] == pl.Utf8
+
+    def test_empty_panel_has_geographic_columns(self):
+        df = pl.DataFrame(schema=PANEL_SCHEMA)
+        assert 'geographic_type' in df.columns
+        assert 'geographic_code' in df.columns
+
+    def test_national_panel_validates(self):
+        from alt_nfp.ingest.base import validate_panel
+
+        rows = [
+            {
+                'period': date(2023, m, 1),
+                'geographic_type': 'national',
+                'geographic_code': 'US',
+                'industry_code': '05',
+                'industry_level': 'supersector',
+                'source': 'ces_sa',
+                'source_type': 'official_sa',
+                'growth': 0.001 * m,
+                'employment_level': 100000.0 + m * 100,
+                'is_seasonally_adjusted': True,
+                'vintage_date': date(2023, m + 1 if m < 12 else 1, 1),
+                'revision_number': 0,
+                'is_final': False,
+                'publication_lag_months': 1,
+                'coverage_ratio': None,
+            }
+            for m in range(1, 4)
+        ]
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        result = validate_panel(df)
+        assert len(result) == 3
+
+    def test_state_level_rows_validate(self):
+        """State-level rows with different geographic_code don't conflict."""
+        from alt_nfp.ingest.base import validate_panel
+
+        rows = [
+            {
+                'period': date(2023, 1, 1),
+                'geographic_type': 'state',
+                'geographic_code': fips,
+                'industry_code': '31',
+                'industry_level': 'sector',
+                'source': 'qcew',
+                'source_type': 'census',
+                'growth': 0.002,
+                'employment_level': 50000.0,
+                'is_seasonally_adjusted': False,
+                'vintage_date': date(2023, 6, 1),
+                'revision_number': 0,
+                'is_final': False,
+                'publication_lag_months': 5,
+                'coverage_ratio': None,
+            }
+            for fips in ['36', '34', '42']
+        ]
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        result = validate_panel(df)
+        assert len(result) == 3
+
+    def test_mixed_geography_validates(self):
+        """National + state rows for same period/industry don't conflict."""
+        from alt_nfp.ingest.base import validate_panel
+
+        rows = [
+            {
+                'period': date(2023, 1, 1),
+                'geographic_type': geo_type,
+                'geographic_code': geo_code,
+                'industry_code': '31',
+                'industry_level': 'sector',
+                'source': 'qcew',
+                'source_type': 'census',
+                'growth': 0.002,
+                'employment_level': 50000.0,
+                'is_seasonally_adjusted': False,
+                'vintage_date': date(2023, 6, 1),
+                'revision_number': 0,
+                'is_final': False,
+                'publication_lag_months': 5,
+                'coverage_ratio': None,
+            }
+            for geo_type, geo_code in [
+                ('national', 'US'),
+                ('state', '36'),
+                ('state', '06'),
+            ]
+        ]
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        result = validate_panel(df)
+        assert len(result) == 3
+
+
+class TestFetchQcewWithGeography:
+    """Tests for state-level QCEW panel transformation (unit tests, no network)."""
+
+    def test_import(self):
+        """fetch_qcew_current_with_geography is importable."""
+        from alt_nfp.ingest.qcew import fetch_qcew_current_with_geography
+        assert callable(fetch_qcew_current_with_geography)
+
+    def test_ingest_qcew_accepts_include_states(self):
+        """ingest_qcew accepts include_states parameter."""
+        import inspect
+        from alt_nfp.ingest.qcew import ingest_qcew
+        sig = inspect.signature(ingest_qcew)
+        assert 'include_states' in sig.parameters
+        assert 'state_fips_list' in sig.parameters
+
+    def test_bls_fetch_qcew_with_geography_importable(self):
+        """fetch_qcew_with_geography is exported from bls layer."""
+        from alt_nfp.ingest.bls import fetch_qcew_with_geography
+        assert callable(fetch_qcew_with_geography)
+
+    def test_qcew_csv_supports_area_slice(self):
+        """BLSHttpClient.get_qcew_csv accepts slice_type='area'."""
+        import inspect
+        from alt_nfp.ingest.bls import BLSHttpClient
+        sig = inspect.signature(BLSHttpClient.get_qcew_csv)
+        assert 'slice_type' in sig.parameters

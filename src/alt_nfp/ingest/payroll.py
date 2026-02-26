@@ -94,6 +94,8 @@ def ingest_provider(
             rows.append(
                 {
                     'period': ref_dt,
+                    'geographic_type': 'national',
+                    'geographic_code': 'US',
                     'industry_code': '05',  # total private (national level)
                     'industry_level': 'supersector',
                     'source': source_name,

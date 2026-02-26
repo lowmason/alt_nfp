@@ -142,6 +142,8 @@ def _build_legacy_panel(providers: list[ProviderConfig]) -> pl.DataFrame:
                     rows.append(
                         {
                             'period': ref_dates[i],
+                            'geographic_type': 'national',
+                            'geographic_code': 'US',
                             'industry_code': '05',
                             'industry_level': 'supersector',
                             'source': source,
@@ -172,6 +174,8 @@ def _build_legacy_panel(providers: list[ProviderConfig]) -> pl.DataFrame:
                     rows.append(
                         {
                             'period': ref_dates[i],
+                            'geographic_type': 'national',
+                            'geographic_code': 'US',
                             'industry_code': '05',
                             'industry_level': 'supersector',
                             'source': 'qcew',

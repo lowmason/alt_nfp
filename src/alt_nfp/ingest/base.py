@@ -13,6 +13,8 @@ import polars as pl
 # growth for one industry unit in one period from one source at one vintage.
 PANEL_SCHEMA: dict[str, pl.DataType] = {
     'period': pl.Date,
+    'geographic_type': pl.Utf8,
+    'geographic_code': pl.Utf8,
     'industry_code': pl.Utf8,
     'industry_level': pl.Utf8,
     'source': pl.Utf8,
@@ -28,11 +30,15 @@ PANEL_SCHEMA: dict[str, pl.DataType] = {
 }
 
 # Columns that must be non-null
-_REQUIRED_NON_NULL = {'period', 'industry_code', 'industry_level', 'source', 'source_type'}
+_REQUIRED_NON_NULL = {
+    'period', 'geographic_type', 'geographic_code',
+    'industry_code', 'industry_level', 'source', 'source_type',
+}
 
 # Valid values for categorical columns
 _VALID_INDUSTRY_LEVELS = {'supersector', 'sector'}
 _VALID_SOURCE_TYPES = {'official_sa', 'official_nsa', 'census', 'payroll'}
+_VALID_GEOGRAPHIC_TYPES = {'national', 'state', 'region', 'division'}
 
 
 def validate_panel(df: pl.DataFrame) -> pl.DataFrame:
@@ -66,14 +72,18 @@ def validate_panel(df: pl.DataFrame) -> pl.DataFrame:
                 f'Column {col!r} has dtype {actual_dtype}, expected {expected_dtype}'
             )
 
-    # Check no duplicates on (period, source, industry_code, revision_number)
-    dup_check = df.group_by(['period', 'source', 'industry_code', 'revision_number']).len()
+    # Check no duplicates on the full observation key
+    _dup_cols = [
+        'period', 'geographic_type', 'geographic_code',
+        'source', 'industry_code', 'revision_number',
+    ]
+    dup_check = df.group_by(_dup_cols).len()
     dups = dup_check.filter(pl.col('len') > 1)
     if len(dups) > 0:
         n_dups = len(dups)
         sample = dups.head(3).to_dicts()
         raise ValueError(
-            f'{n_dups} duplicate (period, source, industry_code, revision_number) '
+            f'{n_dups} duplicate ({", ".join(_dup_cols)}) '
             f'combinations found. Examples: {sample}'
         )
 

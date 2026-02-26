@@ -21,7 +21,7 @@ from ..lookups.industry import get_sector_codes, qcew_to_sector
 from ..lookups.revision_schedules import QCEW_REVISIONS
 from .base import PANEL_SCHEMA, QCEW_VINTAGE_SCHEMA
 from .bls import BLSHttpClient, fetch_qcew as bls_fetch_qcew
-from .bls.qcew import QCEW_INDUSTRY_CODES
+from .bls.qcew import QCEW_INDUSTRY_CODES, fetch_qcew_with_geography
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,168 @@ def fetch_qcew_current(
                 rows.append(
                     {
                         'period': ref_dates[i],
+                        'geographic_type': 'national',
+                        'geographic_code': 'US',
                         'industry_code': sector,
+                        'industry_level': 'sector',
+                        'source': 'qcew',
+                        'source_type': 'census',
+                        'growth': growth,
+                        'employment_level': float(emp[i]),
+                        'is_seasonally_adjusted': False,
+                        'vintage_date': vintage_dt,
+                        'revision_number': 0,
+                        'is_final': False,
+                        'publication_lag_months': lag_months,
+                        'coverage_ratio': None,
+                    }
+                )
+
+    if not rows:
+        return _empty_panel()
+
+    return pl.DataFrame(rows, schema=PANEL_SCHEMA)
+
+
+def fetch_qcew_current_with_geography(
+    start_year: int,
+    end_year: int,
+    include_national: bool = True,
+    include_states: bool = True,
+    state_fips_list: list[str] | None = None,
+    client: BLSHttpClient | None = None,
+) -> pl.DataFrame:
+    """Fetch current QCEW data for national and/or state geographies.
+
+    Parameters
+    ----------
+    start_year : int
+        First year to fetch.
+    end_year : int
+        Last year to fetch (inclusive).
+    include_national : bool
+        Include national-level rows. Defaults to ``True``.
+    include_states : bool
+        Include state-level rows. Defaults to ``True``.
+    state_fips_list : list[str] or None
+        Specific 2-digit state FIPS codes. If ``None``, uses all from
+        :data:`~alt_nfp.lookups.geography.STATES`.
+    client : BLSHttpClient or None
+        Optional HTTP client.
+
+    Returns
+    -------
+    pl.DataFrame
+        Observation panel rows conforming to PANEL_SCHEMA with
+        ``geographic_type`` and ``geographic_code`` populated.
+    """
+    years = list(range(start_year, end_year + 1))
+
+    try:
+        raw = fetch_qcew_with_geography(
+            years=years,
+            include_national=include_national,
+            include_states=include_states,
+            state_fips_list=state_fips_list,
+            client=client,
+        )
+    except Exception as e:
+        logger.warning(f'Failed to fetch QCEW geographic data: {e}')
+        return _empty_panel()
+
+    if len(raw) == 0:
+        return _empty_panel()
+
+    # Validate required columns
+    required = [
+        'industry_code', 'year', 'qtr',
+        'month1_emplvl', 'month2_emplvl', 'month3_emplvl',
+        'geographic_type', 'geographic_code',
+    ]
+    for col in required:
+        if col not in raw.columns:
+            logger.warning(f'QCEW geographic response missing column: {col}')
+            return _empty_panel()
+
+    # Extract monthly employment rows with geographic info
+    all_rows: list[dict] = []
+    for row in raw.iter_rows(named=True):
+        ind_code = str(row['industry_code'])
+        sector = _map_industry_code(ind_code)
+        if sector is None:
+            continue
+
+        year = int(row['year'])
+        qtr = int(row['qtr'])
+        geo_type = str(row['geographic_type'])
+        geo_code = str(row['geographic_code'])
+
+        for m_idx, m_col in enumerate(
+            ['month1_emplvl', 'month2_emplvl', 'month3_emplvl'],
+            start=1,
+        ):
+            if row.get(m_col) is None:
+                continue
+            try:
+                emp = int(row[m_col])
+            except (ValueError, TypeError):
+                continue
+            if emp <= 0:
+                continue
+
+            month_num = (qtr - 1) * 3 + m_idx
+            ref_date = date(year, month_num, 1)
+            all_rows.append(
+                {
+                    'industry_code': sector,
+                    'ref_date': ref_date,
+                    'employment': emp,
+                    'qtr': qtr,
+                    'geographic_type': geo_type,
+                    'geographic_code': geo_code,
+                }
+            )
+
+    if not all_rows:
+        return _empty_panel()
+
+    ind_df = pl.DataFrame(all_rows).sort(
+        'geographic_type', 'geographic_code', 'industry_code', 'ref_date'
+    )
+
+    rows: list[dict] = []
+    for (geo_type, geo_code, sector), grp in ind_df.group_by(
+        ['geographic_type', 'geographic_code', 'industry_code'],
+        maintain_order=True,
+    ):
+        grp = grp.sort('ref_date')
+        emp = grp['employment'].to_numpy().astype(float)
+        ref_dates = grp['ref_date'].to_list()
+        qtrs = grp['qtr'].to_list()
+
+        for i in range(1, len(emp)):
+            if emp[i] > 0 and emp[i - 1] > 0:
+                growth = float(np.log(emp[i]) - np.log(emp[i - 1]))
+                q_label = f'Q{qtrs[i]}'
+                pub_lag = QCEW_REVISIONS[q_label][0].lag_months
+                ref_month = ref_dates[i].month
+                vdate_month = ref_month + pub_lag
+                vdate_year = ref_dates[i].year + (vdate_month - 1) // 12
+                vdate_month = ((vdate_month - 1) % 12) + 1
+                vintage_dt = date(vdate_year, vdate_month, 1)
+
+                lag_months = (
+                    (vintage_dt.year - ref_dates[i].year) * 12
+                    + vintage_dt.month
+                    - ref_dates[i].month
+                )
+
+                rows.append(
+                    {
+                        'period': ref_dates[i],
+                        'geographic_type': str(geo_type),
+                        'geographic_code': str(geo_code),
+                        'industry_code': str(sector),
                         'industry_level': 'sector',
                         'source': 'qcew',
                         'source_type': 'census',
@@ -244,6 +405,8 @@ def load_qcew_vintages(path: Path) -> pl.DataFrame:
                 rows.append(
                     {
                         'period': periods[i],
+                        'geographic_type': 'national',
+                        'geographic_code': 'US',
                         'industry_code': str(ind_code),
                         'industry_level': 'sector',
                         'source': 'qcew',
@@ -269,6 +432,8 @@ def ingest_qcew(
     vintage_dir: Path | None = None,
     start_year: int = 2010,
     end_year: int | None = None,
+    include_states: bool = False,
+    state_fips_list: list[str] | None = None,
     client: BLSHttpClient | None = None,
 ) -> pl.DataFrame:
     """Orchestrate QCEW data ingestion from BLS and historical vintages.
@@ -281,6 +446,12 @@ def ingest_qcew(
         First year for API fetch (default 2010).
     end_year : int, optional
         Last year for API fetch. Defaults to current year.
+    include_states : bool
+        If ``True``, also fetch state-level data via
+        :func:`fetch_qcew_current_with_geography`. Defaults to ``False``.
+    state_fips_list : list[str] or None
+        Specific 2-digit state FIPS codes. If ``None`` and
+        ``include_states`` is ``True``, uses all states.
     client : BLSHttpClient or None
         Optional HTTP client for BLS downloads.
 
@@ -302,12 +473,27 @@ def ingest_qcew(
             parts.append(vintage_df)
 
     # Fetch current data via bls/ download layer
-    try:
-        current_df = fetch_qcew_current(start_year, end_year, client=client)
-        if len(current_df) > 0:
-            parts.append(current_df)
-    except Exception as e:
-        logger.warning(f'Failed to fetch current QCEW data: {e}')
+    if include_states:
+        try:
+            current_df = fetch_qcew_current_with_geography(
+                start_year,
+                end_year,
+                include_national=True,
+                include_states=True,
+                state_fips_list=state_fips_list,
+                client=client,
+            )
+            if len(current_df) > 0:
+                parts.append(current_df)
+        except Exception as e:
+            logger.warning(f'Failed to fetch current QCEW geographic data: {e}')
+    else:
+        try:
+            current_df = fetch_qcew_current(start_year, end_year, client=client)
+            if len(current_df) > 0:
+                parts.append(current_df)
+        except Exception as e:
+            logger.warning(f'Failed to fetch current QCEW data: {e}')
 
     if not parts:
         return _empty_panel()
@@ -317,7 +503,13 @@ def ingest_qcew(
     # Deduplicate: prefer vintage data (higher revision_number) over API data
     combined = (
         combined.sort('revision_number', descending=True)
-        .unique(subset=['period', 'source', 'industry_code', 'revision_number'], keep='first')
+        .unique(
+            subset=[
+                'period', 'geographic_type', 'geographic_code',
+                'source', 'industry_code', 'revision_number',
+            ],
+            keep='first',
+        )
         .sort('period', 'industry_code', 'revision_number')
     )
 

@@ -98,6 +98,8 @@ def fetch_ces_current(
                 rows.append(
                     {
                         'period': ref_dt,
+                        'geographic_type': 'national',
+                        'geographic_code': 'US',
                         'industry_code': str(ss_code),
                         'industry_level': 'supersector',
                         'source': source,
@@ -171,6 +173,8 @@ def load_ces_vintages(path: Path) -> pl.DataFrame:
                 rows.append(
                     {
                         'period': ref_dates[i],
+                        'geographic_type': 'national',
+                        'geographic_code': 'US',
                         'industry_code': str(ss_code),
                         'industry_level': 'supersector',
                         'source': source,
@@ -244,7 +248,13 @@ def ingest_ces_national(
     # Deduplicate: prefer vintage data (explicit revision tracking) over API data
     combined = (
         combined.sort('revision_number', descending=True)
-        .unique(subset=['period', 'source', 'industry_code', 'revision_number'], keep='first')
+        .unique(
+            subset=[
+                'period', 'geographic_type', 'geographic_code',
+                'source', 'industry_code', 'revision_number',
+            ],
+            keep='first',
+        )
         .sort('period', 'industry_code', 'source', 'revision_number')
     )
 

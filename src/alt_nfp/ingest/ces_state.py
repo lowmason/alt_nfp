@@ -105,6 +105,8 @@ def fetch_ces_state_current(
                 rows.append(
                     {
                         'period': ref_dt,
+                        'geographic_type': 'state',
+                        'geographic_code': str(state_fips),
                         'industry_code': ss_2digit,
                         'industry_level': 'supersector',
                         'source': source,
@@ -179,7 +181,10 @@ def ingest_ces_state(
     combined = (
         combined.sort('revision_number', descending=True)
         .unique(
-            subset=['period', 'source', 'industry_code', 'revision_number'],
+            subset=[
+                'period', 'geographic_type', 'geographic_code',
+                'source', 'industry_code', 'revision_number',
+            ],
             keep='first',
         )
         .sort('period', 'industry_code', 'source', 'revision_number')
