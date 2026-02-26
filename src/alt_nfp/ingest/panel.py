@@ -1,7 +1,7 @@
 """Observation panel builder: combines all data sources into a unified panel.
 
-Provides three modes: legacy (existing CSVs), API (BLS fetch + vintages),
-and offline (local parquet only).
+Provides three modes: legacy (existing CSVs), vintage store (Hive parquet),
+and per-source API/parquet fallback when the vintage store is unavailable.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from .base import PANEL_SCHEMA, validate_panel
 from .ces_national import ingest_ces_national
 from .payroll import ingest_provider
 from .qcew import ingest_qcew
+from .vintage_store import read_vintage_store, transform_to_panel
 
 logger = logging.getLogger(__name__)
 
@@ -69,32 +70,48 @@ def build_panel(
         return _build_legacy_panel(providers)
 
     parts: list[pl.DataFrame] = []
+    store_path = raw_dir / 'vintages' / 'vintage_store'
+    start_ref = date(start_year, 1, 12)
+    end_ref = date(end_year, 12, 12)
 
-    # CES National ingestion
-    try:
-        ces_df = ingest_ces_national(
-            vintage_dir=vintage_dir,
-            start_year=start_year,
-            end_year=end_year,
-        )
-        if len(ces_df) > 0:
-            parts.append(ces_df)
-    except Exception as e:
-        logger.warning(f'CES National ingestion failed: {e}')
+    # Primary path: read from Hive-partitioned vintage store
+    if store_path.exists():
+        try:
+            lf = read_vintage_store(
+                store_path=store_path,
+                ref_date_range=(start_ref, end_ref),
+            )
+            vintage_df = transform_to_panel(lf, geographic_scope='national')
+            if len(vintage_df) > 0:
+                parts.append(vintage_df)
+                logger.info('Panel built from vintage store (%d rows)', len(vintage_df))
+        except Exception as e:
+            logger.warning('Vintage store path failed: %s; falling back to per-source ingest', e)
 
-    # QCEW ingestion
-    try:
-        qcew_df = ingest_qcew(
-            vintage_dir=vintage_dir,
-            start_year=start_year,
-            end_year=end_year,
-        )
-        if len(qcew_df) > 0:
-            parts.append(qcew_df)
-    except Exception as e:
-        logger.warning(f'QCEW ingestion failed: {e}')
+    # Fallback: per-source ingest when vintage store unused or empty
+    if not parts:
+        try:
+            ces_df = ingest_ces_national(
+                vintage_dir=vintage_dir,
+                start_year=start_year,
+                end_year=end_year,
+            )
+            if len(ces_df) > 0:
+                parts.append(ces_df)
+        except Exception as e:
+            logger.warning(f'CES National ingestion failed: {e}')
+        try:
+            qcew_df = ingest_qcew(
+                vintage_dir=vintage_dir,
+                start_year=start_year,
+                end_year=end_year,
+            )
+            if len(qcew_df) > 0:
+                parts.append(qcew_df)
+        except Exception as e:
+            logger.warning(f'QCEW ingestion failed: {e}')
 
-    # Payroll provider ingestion
+    # Payroll provider ingestion (always from CSV)
     provider_dir = raw_dir / 'providers' if raw_dir.exists() else None
     for cfg in providers:
         try:

@@ -66,13 +66,13 @@ class ProviderConfig:
     name : str
         Display name (e.g. ``'PP1'``).
     file : str
-        CSV filename under ``data/``.
+        Filename under ``data/`` or ``data/raw/providers/``. CSV or Parquet.
     index_col : str
         Column name for the index level in *file*.
     error_model : ``'iid'`` | ``'ar1'``
         Measurement-error structure.
     births_file : str, optional
-        CSV with a birth-rate column (for structural BD covariate).
+        Separate file (CSV or Parquet) with a birth-rate column (structural BD covariate).
     births_col : str, optional
         Column name for the birth rate inside *births_file*.
     """
@@ -104,11 +104,13 @@ PROVIDERS: list[ProviderConfig] = [
         births_file="alt_nfp_births_2.csv",
         births_col="pp2_births",
     ),
-    # Future providers — just add entries here.  Example:
+    # Example: vendor with Parquet index + separate Parquet births (file drop in data/ or data/raw/providers/)
     # ProviderConfig(
-    #     name="PP3",
-    #     file="alt_nfp_index_3.csv",
-    #     index_col="pp_index_3",
+    #     name="Vendor",
+    #     file="vendor_index.parquet",
+    #     index_col="growth_index",
     #     error_model="iid",
+    #     births_file="vendor_births.parquet",
+    #     births_col="births",
     # ),
 ]

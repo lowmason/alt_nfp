@@ -1,7 +1,8 @@
 """Payroll provider data ingestion.
 
 Loads payroll provider index files (real-time, not revised) into the
-unified observation panel format.
+unified observation panel format. Supports CSV and Parquet (e.g. vendor
+index and optional births file as two separate Parquet files).
 """
 
 from __future__ import annotations
@@ -17,6 +18,27 @@ from ..config import DATA_DIR, ProviderConfig
 from .base import PANEL_SCHEMA
 
 logger = logging.getLogger(__name__)
+
+
+def read_provider_table(fpath: Path) -> pl.DataFrame | None:
+    """Read a provider CSV or Parquet file; return sorted by ref_date, or None on failure."""
+    if not fpath.exists():
+        return None
+    try:
+        if fpath.suffix.lower() == ".parquet":
+            raw = pl.read_parquet(str(fpath))
+        else:
+            raw = pl.read_csv(str(fpath), try_parse_dates=True)
+    except Exception as e:
+        logger.warning("Failed to read provider file %s: %s", fpath, e)
+        return None
+    if "ref_date" not in raw.columns:
+        logger.warning("Column ref_date not found in %s", fpath)
+        return None
+    # Normalise to date (Parquet may give datetime)
+    if raw["ref_date"].dtype != pl.Date:
+        raw = raw.with_columns(pl.col("ref_date").cast(pl.Date))
+    return raw.sort("ref_date")
 
 
 def ingest_provider(
@@ -47,14 +69,9 @@ def ingest_provider(
 
     if fpath is None:
         fpath = DATA_DIR / config.file
-        if not fpath.exists():
-            logger.warning(f'Provider file not found: {fpath}')
-            return _empty_panel()
-
-    try:
-        raw = pl.read_csv(str(fpath), try_parse_dates=True).sort('ref_date')
-    except Exception as e:
-        logger.warning(f'Failed to read provider file {fpath}: {e}')
+    raw = read_provider_table(fpath)
+    if raw is None:
+        logger.warning("Provider file not found or unreadable: %s", fpath)
         return _empty_panel()
 
     if config.index_col not in raw.columns:

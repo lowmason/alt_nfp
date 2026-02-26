@@ -258,6 +258,8 @@ def transform_to_panel(
     result = (
         lf.select(
             pl.col("ref_date").alias("period"),
+            pl.col("geographic_type"),
+            pl.col("geographic_code"),
             pl.col("industry_code"),
             pl.col("industry_type").alias("industry_level"),
             pl.col("source_tag").alias("source"),

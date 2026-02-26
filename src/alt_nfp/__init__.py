@@ -15,6 +15,7 @@ from .sampling import (
     sample_model,
 )
 from .sensitivity import run_sensitivity
+from .panel_adapter import panel_to_model_data
 
 # New data infrastructure (v4)
 from .lookups import INDUSTRY_HIERARCHY, QCEW_REVISIONS, CES_REVISIONS
@@ -36,6 +37,7 @@ __all__ = [
     "MEDIUM_SAMPLER_KWARGS",
     "run_backtest",
     "run_sensitivity",
+    "panel_to_model_data",
     # New data infrastructure
     "INDUSTRY_HIERARCHY",
     "QCEW_REVISIONS",

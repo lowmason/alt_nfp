@@ -19,6 +19,7 @@ from .config import (
     PROVIDERS,
     ProviderConfig,
 )
+from .ingest.payroll import read_provider_table
 
 
 def load_data(
@@ -67,14 +68,14 @@ def load_data(
     levels = cal.join(ces, on="ref_date", how="left").join(qcew, on="ref_date", how="left")
 
     # ------------------------------------------------------------------
-    # Load each provider's index and join onto calendar
+    # Load each provider's index and join onto calendar (CSV or Parquet)
     # ------------------------------------------------------------------
     for cfg in providers:
-        pp_df = (
-            pl.read_csv(str(DATA_DIR / cfg.file), try_parse_dates=True)
-            .sort("ref_date")
-            .select(["ref_date", cfg.index_col])
-        )
+        pp_raw = read_provider_table(DATA_DIR / cfg.file)
+        if pp_raw is None or cfg.index_col not in pp_raw.columns:
+            pp_df = pl.DataFrame({"ref_date": [], cfg.index_col: []})
+        else:
+            pp_df = pp_raw.select(["ref_date", cfg.index_col])
         levels = levels.join(pp_df, on="ref_date", how="left")
 
     levels = levels.sort("ref_date")
@@ -180,19 +181,20 @@ def load_data(
             "color": PP_COLORS[p % len(PP_COLORS)],
         }
 
-        # Load birth-rate data if specified
+        # Load birth-rate data if specified (CSV or Parquet)
         if cfg.births_file and cfg.births_col:
-            births_df = (
-                pl.read_csv(str(DATA_DIR / cfg.births_file), try_parse_dates=True)
-                .sort("ref_date")
-                .select(["ref_date", cfg.births_col])
-            )
-            births_joined = pl.DataFrame({"ref_date": dates}).join(
-                births_df, on="ref_date", how="left"
-            )
-            births_arr = births_joined[cfg.births_col].to_numpy().astype(float)
-            entry["births"] = births_arr
-            entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
+            births_raw = read_provider_table(DATA_DIR / cfg.births_file)
+            if births_raw is not None and cfg.births_col in births_raw.columns:
+                births_df = births_raw.select(["ref_date", cfg.births_col])
+                births_joined = pl.DataFrame({"ref_date": dates}).join(
+                    births_df, on="ref_date", how="left"
+                )
+                births_arr = births_joined[cfg.births_col].to_numpy().astype(float)
+                entry["births"] = births_arr
+                entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
+            else:
+                entry["births"] = None
+                entry["births_obs"] = None
         else:
             entry["births"] = None
             entry["births_obs"] = None
