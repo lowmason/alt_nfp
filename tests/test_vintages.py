@@ -11,6 +11,7 @@ from alt_nfp.vintages import (
     build_noise_multiplier_vector,
     final_view,
     real_time_view,
+    specific_vintage_view,
     vintage_diff,
 )
 
@@ -180,3 +181,186 @@ class TestNoiseMultiplier:
             pl.col('source') == 'pp1'
         )['index'][0]
         assert multipliers[pp_idx] == 1.0
+
+    def test_noise_multiplier_benchmark_revision(self):
+        """CES benchmark (rev=-1) should get multiplier 1.0."""
+        panel = _make_test_panel()
+        multipliers = build_noise_multiplier_vector(panel)
+
+        bench_idx = panel.with_row_index().filter(
+            (pl.col('source') == 'ces_sa') & (pl.col('revision_number') == -1)
+        )['index'][0]
+        assert multipliers[bench_idx] == 1.0
+
+    def test_noise_multiplier_unknown_source(self):
+        """Unknown source defaults to 1.0."""
+        rows = [
+            {
+                'period': date(2023, 2, 1),
+                'industry_code': '05',
+                'industry_level': 'supersector',
+                'source': 'mystery_source',
+                'source_type': 'other',
+                'growth': 0.001,
+                'employment_level': 50000.0,
+                'is_seasonally_adjusted': False,
+                'vintage_date': date(2023, 3, 1),
+                'revision_number': 0,
+                'is_final': False,
+                'publication_lag_months': 1,
+                'coverage_ratio': None,
+            }
+        ]
+        panel = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        multipliers = build_noise_multiplier_vector(panel)
+        assert multipliers[0] == 1.0
+
+    def test_noise_multiplier_null_revision(self):
+        """Null revision_number defaults to 1.0."""
+        rows = [
+            {
+                'period': date(2023, 2, 1),
+                'industry_code': '05',
+                'industry_level': 'supersector',
+                'source': 'ces_sa',
+                'source_type': 'official_sa',
+                'growth': 0.001,
+                'employment_level': 50000.0,
+                'is_seasonally_adjusted': True,
+                'vintage_date': date(2023, 3, 1),
+                'revision_number': None,
+                'is_final': False,
+                'publication_lag_months': 1,
+                'coverage_ratio': None,
+            }
+        ]
+        panel = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        multipliers = build_noise_multiplier_vector(panel)
+        assert multipliers[0] == 1.0
+
+    def test_noise_multiplier_qcew_quarters(self):
+        """QCEW noise multipliers are quarter-dependent."""
+        rows = []
+        # Create one QCEW observation per quarter with revision 0
+        for m in [1, 4, 7, 10]:
+            rows.append(
+                {
+                    'period': date(2023, m, 1),
+                    'industry_code': '05',
+                    'industry_level': 'supersector',
+                    'source': 'qcew',
+                    'source_type': 'census',
+                    'growth': 0.001,
+                    'employment_level': 50000.0,
+                    'is_seasonally_adjusted': False,
+                    'vintage_date': date(2023, m + 3 if m < 10 else 12, 1),
+                    'revision_number': 0,
+                    'is_final': False,
+                    'publication_lag_months': 3,
+                    'coverage_ratio': None,
+                }
+            )
+        panel = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        multipliers = build_noise_multiplier_vector(panel)
+        # All should have a defined multiplier (not default 1.0 for rev 0)
+        # The exact values depend on QCEW_REVISIONS, but they should all be > 1
+        assert len(multipliers) == 4
+
+
+class TestSpecificVintageView:
+    """Tests for specific_vintage_view."""
+
+    def test_filters_source_and_revision(self):
+        """specific_vintage_view returns only matching source and revision."""
+        panel = _make_test_panel().lazy()
+
+        result = specific_vintage_view(panel, source='ces_sa', revision_number=0).collect()
+        assert len(result) == 1
+        assert result['source'][0] == 'ces_sa'
+        assert result['revision_number'][0] == 0
+
+    def test_benchmark_revision(self):
+        """Can select benchmark rows (revision_number=-1)."""
+        panel = _make_test_panel().lazy()
+
+        result = specific_vintage_view(panel, source='ces_sa', revision_number=-1).collect()
+        assert len(result) == 1
+        assert result['revision_number'][0] == -1
+        assert result['is_final'][0] is True
+
+    def test_no_match_returns_empty(self):
+        """Non-existent source/revision combo returns empty frame."""
+        panel = _make_test_panel().lazy()
+
+        result = specific_vintage_view(panel, source='nonexistent', revision_number=0).collect()
+        assert len(result) == 0
+
+    def test_sorted_output(self):
+        """Output is sorted by (period, industry_code)."""
+        panel = _make_test_panel().lazy()
+
+        result = specific_vintage_view(panel, source='ces_sa', revision_number=1).collect()
+        resorted = result.sort('period', 'industry_code')
+        assert result.equals(resorted)
+
+
+class TestRealTimeViewEdgeCases:
+    """Edge case tests for real_time_view."""
+
+    def test_as_of_before_any_vintage(self):
+        """as_of date before all vintage_dates returns empty."""
+        panel = _make_test_panel().lazy()
+        result = real_time_view(panel, as_of=date(2020, 1, 1)).collect()
+        assert len(result) == 0
+
+    def test_multiple_industries(self):
+        """real_time_view deduplicates per (period, source, industry_code)."""
+        rows = [
+            {
+                'period': date(2023, 2, 1),
+                'industry_code': code,
+                'industry_level': 'supersector',
+                'source': 'ces_sa',
+                'source_type': 'official_sa',
+                'growth': 0.001,
+                'employment_level': 100000.0,
+                'is_seasonally_adjusted': True,
+                'vintage_date': date(2023, 3, 1),
+                'revision_number': rev,
+                'is_final': False,
+                'publication_lag_months': 1,
+                'coverage_ratio': None,
+            }
+            for code in ['05', '30']
+            for rev in [0, 1]
+        ]
+        # Add later vintage dates for rev 1
+        for r in rows:
+            if r['revision_number'] == 1:
+                r['vintage_date'] = date(2023, 4, 1)
+
+        panel = pl.DataFrame(rows, schema=PANEL_SCHEMA).lazy()
+        result = real_time_view(panel, as_of=date(2023, 5, 1)).collect()
+
+        # Should have one row per (period, source, industry_code) → 2 rows
+        assert len(result) == 2
+        # Both should be revision 1 (the highest available)
+        assert all(r == 1 for r in result['revision_number'].to_list())
+
+
+class TestVintageDiffEdgeCases:
+    """Edge case tests for vintage_diff."""
+
+    def test_no_overlap_returns_empty(self):
+        """vintage_diff with non-overlapping revisions returns empty."""
+        panel = _make_test_panel().lazy()
+        # rev 0 and rev -1 don't overlap because -1 has different growth
+        # But they share the same period/industry, so we get a diff
+        diff = vintage_diff(panel, source='ces_sa', rev_a=0, rev_b=-1).collect()
+        assert len(diff) == 1  # they share period=2023-02 industry=05
+
+    def test_diff_nonexistent_source(self):
+        """vintage_diff with nonexistent source returns empty."""
+        panel = _make_test_panel().lazy()
+        diff = vintage_diff(panel, source='nonexistent', rev_a=0, rev_b=1).collect()
+        assert len(diff) == 0

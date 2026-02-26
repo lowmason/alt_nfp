@@ -125,6 +125,48 @@ class TestValidatePanel:
         assert len(result) > 0
         assert set(PANEL_SCHEMA.keys()).issubset(set(result.columns))
 
+    def test_validate_panel_non_finite_growth(self):
+        """Non-finite growth values raise ValueError."""
+        rows = _make_panel_rows(3)
+        rows[1]['growth'] = float('inf')
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+
+        with pytest.raises(ValueError, match='non-finite'):
+            validate_panel(df)
+
+    def test_validate_panel_nan_growth(self):
+        """NaN growth values raise ValueError."""
+        rows = _make_panel_rows(3)
+        rows[1]['growth'] = float('nan')
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+
+        with pytest.raises(ValueError, match='non-finite'):
+            validate_panel(df)
+
+    def test_validate_panel_null_growth_ok(self):
+        """Null growth values pass validation (only non-finite is rejected)."""
+        rows = _make_panel_rows(3)
+        rows[1]['growth'] = None
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+        result = validate_panel(df)
+        assert len(result) == 3
+
+    def test_validate_panel_wrong_dtype(self):
+        """Wrong dtype raises ValueError."""
+        df = _make_panel_df(3)
+        df = df.with_columns(pl.col('growth').cast(pl.Int32))
+
+        with pytest.raises(ValueError, match='dtype'):
+            validate_panel(df)
+
+    def test_validate_panel_payroll_bad_revision(self):
+        """Payroll rows with revision_number != 0 raise ValueError."""
+        rows = _make_panel_rows(2, source='pp1', source_type='payroll', revision_number=1)
+        df = pl.DataFrame(rows, schema=PANEL_SCHEMA)
+
+        with pytest.raises(ValueError, match='payroll'):
+            validate_panel(df)
+
     def test_legacy_panel_builds(self):
         """build_panel(use_legacy=True) produces a valid panel from existing CSVs."""
         from alt_nfp.config import DATA_DIR
@@ -136,3 +178,63 @@ class TestValidatePanel:
         panel = build_panel(use_legacy=True)
         assert len(panel) > 0
         assert set(PANEL_SCHEMA.keys()).issubset(set(panel.columns))
+
+
+class TestSaveLoadPanel:
+    """Tests for save_panel / load_panel round-trip."""
+
+    def test_save_load_roundtrip(self, tmp_path):
+        """Panel survives save → load with identical data."""
+        from alt_nfp.ingest.panel import load_panel, save_panel
+
+        df = _make_panel_df(5)
+        save_panel(df, tmp_path)
+
+        loaded = load_panel(tmp_path)
+        assert loaded.equals(df)
+
+    def test_save_creates_manifest(self, tmp_path):
+        """save_panel writes a panel_manifest.json with expected keys."""
+        import json
+
+        from alt_nfp.ingest.panel import save_panel
+
+        df = _make_panel_df(5)
+        save_panel(df, tmp_path)
+
+        manifest_path = tmp_path / 'panel_manifest.json'
+        assert manifest_path.exists()
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        assert manifest['row_count'] == 5
+        assert 'source_counts' in manifest
+        assert 'ces_sa' in manifest['source_counts']
+        assert 'date_range' in manifest
+        assert 'build_timestamp' in manifest
+
+    def test_load_missing_raises(self, tmp_path):
+        """load_panel on a directory without parquet raises FileNotFoundError."""
+        from alt_nfp.ingest.panel import load_panel
+
+        with pytest.raises(FileNotFoundError):
+            load_panel(tmp_path)
+
+    def test_save_creates_directory(self, tmp_path):
+        """save_panel creates output directory if it doesn't exist."""
+        from alt_nfp.ingest.panel import save_panel
+
+        out = tmp_path / 'nested' / 'dir'
+        save_panel(_make_panel_df(3), out)
+        assert (out / 'observation_panel.parquet').exists()
+
+    def test_save_load_empty_panel(self, tmp_path):
+        """Empty panel round-trips correctly."""
+        from alt_nfp.ingest.panel import load_panel, save_panel
+
+        df = pl.DataFrame(schema=PANEL_SCHEMA)
+        save_panel(df, tmp_path)
+
+        loaded = load_panel(tmp_path)
+        assert len(loaded) == 0
+        assert set(loaded.columns) == set(PANEL_SCHEMA.keys())
