@@ -28,7 +28,7 @@ Hive partitioning by `source` and `seasonally_adjusted`. Each partition currentl
 ### 1.2 Schema (Target)
 
 | Column | Type | Description |
-|-----------------------------------|-----------------|--------------------|
+|----------------------------------|------------------|--------------------|
 | `source` | Utf8 | `'ces'` or `'qcew'` (Hive partition key) |
 | `seasonally_adjusted` | Boolean | Hive partition key |
 | `series_id` | UInt32 | Unique series identifier (optional, newer files only) |
@@ -48,7 +48,7 @@ Hive partitioning by `source` and `seasonally_adjusted`. Each partition currentl
 These are documented in `AUDIT.md` and confirmed by inspection.
 
 | \# | Issue | Severity | Rows Affected |
-|---------------|---------------|-----------------|---------------------------|
+|----------------|----------------|----------------|------------------------|
 | 1 | **Duplicate files per partition.** Older files (no `series_id`) and newer files (with `series_id`) coexist. Reading with `hive_partitioning=True` returns \~2× expected rows. | High | 1,684,469 duplicates |
 | 2 | **QCEW employment in raw headcount, CES in thousands.** CES national total nonfarm: 130k–160k. QCEW: 126M–314M. Off by \~1,000×. | High | All QCEW rows |
 | 3 | **8,478 rows with null `vintage_date`.** All CES subnational for `ref_date=2025-09-12`, revision 1. Appear to be "latest available" snapshots where the vintage date was not yet assigned. | Medium | 8,478 |
@@ -80,7 +80,7 @@ Before the store can be consumed by the ingest pipeline, the following correctio
 ### 2.1 Data Sources and Release Schedules
 
 | Source | Frequency | Lag | Revisions | Notes |
-|--------------|---------------|--------------|---------------|--------------|
+|---------------|---------------|---------------|---------------|---------------|
 | CES National | Monthly | \~5 weeks | 3 prints + annual benchmark | First Friday of month |
 | CES State | Monthly | \~7 weeks | 2 prints + annual benchmark | 3rd Friday after national |
 | QCEW | Quarterly | \~5 months | 2–5 vintages (asymmetric by quarter) | Quarterly CSV files |
@@ -377,7 +377,7 @@ The following work items bridge the current codebase to this specification.
 ### 5.1 Vintage Store Cleanup (prerequisite)
 
 | Task | Description | Files |
-|------------------|-----------------------------------|-------------------|
+|-------------------|-----------------------------------|-------------------|
 | 5.1.1 | Remove duplicate parquet files per partition (keep `2bc608b4…` files) | `data/raw/vintages/series/` |
 | 5.1.2 | Normalize QCEW employment to thousands | `data/raw/vintages/series/source=qcew/` |
 | 5.1.3 | Fill or drop null `vintage_date` rows (8,478 CES subnational) | `data/raw/vintages/series/source=ces/` |
@@ -388,7 +388,7 @@ The following work items bridge the current codebase to this specification.
 ### 5.2 New Reader Module
 
 | Task | Description | Files |
-|------------------|-----------------------------------|-------------------|
+|-------------------|-----------------------------------|-------------------|
 | 5.2.1 | Implement `read_vintage_store()` as a lazy Polars scan with partition pushdown | New: `ingest/vintage_store.py` |
 | 5.2.2 | Implement `transform_to_panel()` — vintage store → `PANEL_SCHEMA` (growth computation, metadata derivation, unit normalization) | New: `ingest/vintage_store.py` |
 | 5.2.3 | Deprecate `load_ces_vintages()` and `load_qcew_vintages()` in favor of unified reader | `ingest/ces_national.py`, `ingest/qcew.py` |
@@ -397,7 +397,7 @@ The following work items bridge the current codebase to this specification.
 ### 5.3 Update Pipeline
 
 | Task | Description | Files |
-|------------------|-----------------------------------|-------------------|
+|-------------------|-----------------------------------|-------------------|
 | 5.3.1 | Implement `append_to_vintage_store()` with deduplication check | New: `ingest/vintage_store.py` |
 | 5.3.2 | Implement `compact_partition()` — merge small files within a partition | New: `ingest/vintage_store.py` |
 | 5.3.3 | Wire CES fetcher (`fetch_ces_current`) to produce vintage-store-schema rows and call `append_to_vintage_store()` | `ingest/ces_national.py` |
@@ -406,7 +406,7 @@ The following work items bridge the current codebase to this specification.
 ### 5.4 Panel Builder Refactor
 
 | Task | Description | Files |
-|------------------|-----------------------------------|-------------------|
+|-------------------|-----------------------------------|-------------------|
 | 5.4.1 | Update `build_panel()` to use `read_vintage_store()` + `transform_to_panel()` instead of separate CES/QCEW loaders | `ingest/panel.py` |
 | 5.4.2 | Add `geographic_code` to `PANEL_SCHEMA` (currently lost in transformation; needed for state-level modeling) | `ingest/base.py`, `ingest/panel.py` |
 | 5.4.3 | Update `validate_panel()` to account for new geographic scope | `ingest/base.py` |
@@ -414,7 +414,7 @@ The following work items bridge the current codebase to this specification.
 ### 5.5 Tests
 
 | Task | Description | Files |
-|------------------|-----------------------------------|-------------------|
+|-------------------|-----------------------------------|-------------------|
 | 5.5.1 | Test `read_vintage_store()` with a synthetic Hive-partitioned fixture | `tests/ingest/test_vintage_store.py` |
 | 5.5.2 | Test `transform_to_panel()` round-trip (known levels → expected growth) | `tests/ingest/test_vintage_store.py` |
 | 5.5.3 | Test `append_to_vintage_store()` deduplication semantics | `tests/ingest/test_vintage_store.py` |
