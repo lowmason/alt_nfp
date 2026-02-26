@@ -12,6 +12,7 @@ The current implementation (v3) lives in the `src/alt_nfp` Python package. Earli
 - **Package Manager**: uv
 - **Build Backend**: hatchling
 - **Core Libraries**: PyMC, PyTensor, ArviZ, Polars, NumPy, Matplotlib, Marimo
+- **Data Ingestion**: httpx (async HTTP with HTTP/2), BeautifulSoup4 + lxml (HTML/XML parsing)
 - **Sampler**: nutpie (preferred on Apple Silicon), falls back to PyMC NUTS
 
 ## Key Commands
@@ -28,6 +29,15 @@ python -c "from alt_nfp.backtest import run_backtest; run_backtest()"
 
 # Run the QCEW sigma sensitivity analysis
 python -c "from alt_nfp.sensitivity import run_sensitivity; run_sensitivity()"
+
+# Run the vintage pipeline CLI
+python -m alt_nfp.vintages
+
+# Update BLS publication dates (prints new entries for manual review)
+python -m alt_nfp.lookups.update_schedule
+
+# Build publication_calendar.parquet
+python scripts/build_publication_calendar.py
 
 # Format code
 black . --line-length 100
@@ -50,8 +60,8 @@ alt_nfp/
 ├── src/alt_nfp/              # Core Python package
 │   ├── __init__.py           # Package exports
 │   ├── config.py             # ProviderConfig, PROVIDERS list, paths, constants
-│   ├── data.py               # existing — legacy data loading
-│   ├── model.py              # existing — PyMC model
+│   ├── data.py               # Legacy data loading
+│   ├── model.py              # PyMC model definition
 │   ├── sampling.py           # sample_model() — nutpie/PyMC with preset configs
 │   ├── diagnostics.py        # Parameter summary, source contributions, divergences
 │   ├── checks.py             # Prior/posterior predictive checks, LOO-CV
@@ -61,21 +71,47 @@ alt_nfp/
 │   ├── backtest.py           # Nowcast backtest (CES-censoring experiment)
 │   ├── sensitivity.py        # QCEW sigma sensitivity analysis
 │   ├── lookups/              # Static reference tables
-│   │   ├── __init__.py
 │   │   ├── industry.py       # NAICS → supersector → domain hierarchy + CES series ID map
 │   │   ├── revision_schedules.py  # QCEW & CES vintage schedules + publication calendar
-│   │   └── geography.py      # placeholder for future geo hierarchy
+│   │   ├── publication_dates.py   # Hard-coded BLS release dates (CES, QCEW, SAE)
+│   │   ├── update_schedule.py     # CLI to fetch new dates from BLS schedule pages
+│   │   └── geography.py      # State/area geography hierarchy
 │   ├── ingest/               # Raw data → observation panel
-│   │   ├── __init__.py
 │   │   ├── base.py           # PANEL_SCHEMA, validate_panel
-│   │   ├── qcew.py           # QCEW ingestion (BLS API + historical parquet)
-│   │   ├── ces.py            # CES ingestion (BLS API + historical parquet)
-│   │   ├── payroll.py        # provider index ingestion
-│   │   └── panel.py          # build_panel, save/load
-│   └── vintages/             # Vintage views & evaluation
-│       ├── __init__.py
+│   │   ├── ces_national.py   # CES national-level ingestion
+│   │   ├── ces_state.py      # CES state-level ingestion
+│   │   ├── qcew.py           # QCEW ingestion
+│   │   ├── payroll.py        # Provider index ingestion
+│   │   ├── panel.py          # build_panel, save/load
+│   │   ├── aggregate.py      # Data aggregation utilities
+│   │   ├── releases.py       # Release management
+│   │   ├── tagger.py         # Data tagging (source/vintage metadata)
+│   │   ├── vintage_store.py  # Vintage data storage/retrieval
+│   │   ├── bls/              # BLS API client layer
+│   │   │   ├── _http.py      # HTTP transport for BLS API
+│   │   │   ├── _programs.py  # BLS program definitions (CES, QCEW, etc.)
+│   │   │   ├── ces_national.py  # CES national series downloads
+│   │   │   ├── ces_state.py    # CES state series downloads
+│   │   │   └── qcew.py        # QCEW data downloads
+│   │   └── release_dates/    # BLS publication schedule tracking
+│   │       ├── config.py     # Release date configuration
+│   │       ├── parser.py     # Schedule parser
+│   │       ├── scraper.py    # Release date scraper
+│   │       └── vintage_dates.py  # Vintage date management
+│   └── vintages/             # Vintage data pipeline (runnable: python -m alt_nfp.vintages)
+│       ├── __main__.py       # CLI entry point
+│       ├── _client.py        # Vintage client utilities
+│       ├── build_store.py    # Build vintage store from raw data
 │       ├── views.py          # real_time_view, final_view
-│       └── evaluation.py     # vintage_diff, noise multiplier builder
+│       ├── evaluation.py     # vintage_diff, noise multiplier builder
+│       ├── download/         # Vintage data downloaders
+│       │   ├── ces.py        # CES vintage downloads
+│       │   └── qcew.py       # QCEW vintage downloads
+│       └── processing/       # Vintage data processing
+│           ├── ces_national.py   # CES national vintage processing
+│           ├── qcew.py           # QCEW vintage processing
+│           ├── sae_states.py     # State and Area Employment processing
+│           └── combine.py        # Combine vintage files
 ├── data/                     # Input CSV data (CES, QCEW, payroll provider indices)
 │   └── raw/                  # Historical revision data
 │       ├── vintages/         # Parquet files (QCEW/CES vintages, pub calendar)
@@ -83,9 +119,21 @@ alt_nfp/
 ├── tests/                    # Test suite
 │   ├── test_lookups.py       # Industry hierarchy & revision schedule tests
 │   ├── test_ingest.py        # Panel validation & schema tests
-│   └── test_vintages.py      # Vintage view & evaluation tests
-├── docs/                     # Methodology and evaluation documentation
-├── archive/                  # Earlier monolithic scripts (v1, v2)
+│   ├── test_new_ingest.py    # Tests for new ingest modules
+│   ├── test_release_dates.py # Release date parsing/scraping tests
+│   ├── test_vintage_store.py # Vintage store tests
+│   ├── test_vintages.py      # Vintage view & evaluation tests
+│   ├── test_publication_calendar.py  # Publication calendar build tests
+│   ├── test_publication_dates.py     # Publication date lookup tests
+│   └── ingest/bls/           # BLS API client tests
+│       ├── test_downloads.py
+│       ├── test_http.py
+│       └── test_programs.py
+├── scripts/                  # One-off build/maintenance scripts
+│   └── build_publication_calendar.py  # Build publication_calendar.parquet
+├── specs/                    # Design specifications
+│   └── vintage_pipeline_spec.md
+├── archive/                  # Earlier monolithic scripts (v1, v2), old todos
 ├── output/                   # Generated results (InferenceData, plots)
 ├── pyproject.toml            # Project config, dependencies, tool settings
 └── uv.lock                   # Dependency lock file
@@ -107,6 +155,11 @@ alt_nfp/
 - Data is loaded from CSV files in `data/` using Polars, transformed to growth rates.
 - PyMC models are built declaratively; sampling uses nutpie when available.
 - Output artifacts (NetCDF inference data, PNG plots) go to `output/`.
+- **BLS API client** (`ingest/bls/`): structured HTTP layer for downloading CES and QCEW data directly from BLS. `_programs.py` defines program metadata; `_http.py` handles request transport.
+- **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. Runnable as `python -m alt_nfp.vintages`. Vintage store (`ingest/vintage_store.py`) handles parquet-based storage/retrieval.
+- **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to determine data availability windows for real-time vintage construction.
+- **Publication date lookups** (`lookups/publication_dates.py`): hard-coded BLS release dates for CES, QCEW, and SAE programs, scraped from BLS schedule pages. `update_schedule.py` fetches new dates and prints copy-paste-ready dict entries. `scripts/build_publication_calendar.py` merges historical + hard-coded dates into `publication_calendar.parquet`.
+- **`@pytest.mark.network`**: tests requiring network access are marked; deselect with `-m "not network"`.
 
 ---
 
