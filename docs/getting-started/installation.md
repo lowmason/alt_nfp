@@ -11,7 +11,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/example/alt_nfp.git
+git clone https://github.com/lowmason/alt_nfp.git
 cd alt_nfp
 
 # Install all dependencies (including dev tools)

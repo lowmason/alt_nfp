@@ -2,9 +2,9 @@ site_name: alt_nfp
 site_description: >-
   Bayesian state-space model for nowcasting U.S. nonfarm payroll employment
   growth using CES, QCEW, and payroll-provider data.
-site_url: ""
-repo_url: https://github.com/example/alt_nfp
-repo_name: alt_nfp
+site_url: https://lowmason.github.io/alt_nfp/
+repo_url: https://github.com/lowmason/alt_nfp
+repo_name: lowmason/alt_nfp
 
 theme:
   name: material
@@ -119,7 +119,7 @@ extra_javascript:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/example/alt_nfp
+      link: https://github.com/lowmason/alt_nfp
 
 nav:
   - Home: index.md
