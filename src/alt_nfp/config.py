@@ -72,28 +72,39 @@ class ProviderConfig:
     Adding a new provider requires only a new entry in ``PROVIDERS``.
     The model, diagnostics, and plots adapt automatically.
 
+    All provider files share a standard Parquet/CSV schema::
+
+        ref_date, geography_type, geography_code,
+        industry_type, industry_code, employment, [birth_rate]
+
+    The ``employment`` column is log-differenced to compute growth rates.
+    If ``birth_rate`` is present it is used as a BD covariate.
+
     Parameters
     ----------
     name : str
-        Display name (e.g. ``'PP1'``).
+        Display name (e.g. ``'G'``).
     file : str
-        Filename under ``data/`` or ``data/raw/providers/``. CSV or Parquet.
-    index_col : str
-        Column name for the index level in *file*.
+        Path relative to ``DATA_DIR`` (e.g. ``'raw/providers/G/g_provider.parquet'``).
     error_model : ``'iid'`` | ``'ar1'``
         Measurement-error structure.
-    births_file : str, optional
-        Separate file (CSV or Parquet) with a birth-rate column (structural BD covariate).
-    births_col : str, optional
-        Column name for the birth rate inside *births_file*.
+    industry_type : str
+        Filter value for the ``industry_type`` column (default ``'national'``).
+    industry_code : str
+        Filter value for the ``industry_code`` column (default ``'00'``).
+    geography_type : str
+        Filter value for the ``geography_type`` column (default ``'national'``).
+    geography_code : str
+        Filter value for the ``geography_code`` column (default ``'00'``).
     """
 
     name: str
     file: str
-    index_col: str
     error_model: Literal["iid", "ar1"] = "iid"
-    births_file: str | None = None
-    births_col: str | None = None
+    industry_type: str = "national"
+    industry_code: str = "00"
+    geography_type: str = "national"
+    geography_code: str = "00"
 
 
 # ---------------------------------------------------------------------------
@@ -102,26 +113,8 @@ class ProviderConfig:
 
 PROVIDERS: list[ProviderConfig] = [
     ProviderConfig(
-        name="PP1",
-        file="alt_nfp_index_1.csv",
-        index_col="pp_index_1",
-        error_model="ar1",  # multi-establishment restructuring → autocorrelated residuals
-    ),
-    ProviderConfig(
-        name="PP2",
-        file="alt_nfp_index_2.csv",
-        index_col="pp_index_2_0",
+        name="G",
+        file="raw/providers/G/g_provider.parquet",
         error_model="iid",
-        births_file="alt_nfp_births_2.csv",
-        births_col="pp2_births",
     ),
-    # Example: vendor with Parquet index + separate Parquet births (file drop in data/ or data/raw/providers/)
-    # ProviderConfig(
-    #     name="Vendor",
-    #     file="vendor_index.parquet",
-    #     index_col="growth_index",
-    #     error_model="iid",
-    #     births_file="vendor_births.parquet",
-    #     births_col="births",
-    # ),
 ]

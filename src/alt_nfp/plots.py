@@ -202,7 +202,7 @@ def plot_reconstructed_index(idata: az.InferenceData, data: dict) -> None:
     pp_dates_arr = np.array(base_dates)
     for pp in pp_data:
         try:
-            vals = levels[pp["index_col"]].to_numpy().astype(float)
+            vals = levels[pp["emp_col"]].to_numpy().astype(float)
             mask = np.isfinite(vals)
             if mask.sum() > 1:
                 ax.plot(pp_dates_arr[mask][1:], vals[mask][1:], color=pp["color"], lw=1,

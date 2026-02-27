@@ -19,7 +19,7 @@ from .config import (
     PROVIDERS,
     ProviderConfig,
 )
-from .ingest.payroll import read_provider_table
+from .ingest.payroll import load_provider_series
 
 
 def load_data(
@@ -68,14 +68,18 @@ def load_data(
     levels = cal.join(ces, on="ref_date", how="left").join(qcew, on="ref_date", how="left")
 
     # ------------------------------------------------------------------
-    # Load each provider's index and join onto calendar (CSV or Parquet)
+    # Load each provider's employment series and join onto calendar
     # ------------------------------------------------------------------
     for cfg in providers:
-        pp_raw = read_provider_table(DATA_DIR / cfg.file)
-        if pp_raw is None or cfg.index_col not in pp_raw.columns:
-            pp_df = pl.DataFrame({"ref_date": [], cfg.index_col: []})
+        emp_col = f"{cfg.name.lower()}_employment"
+        pp_series = load_provider_series(cfg)
+        if pp_series is None:
+            pp_df = pl.DataFrame({"ref_date": [], emp_col: []})
         else:
-            pp_df = pp_raw.select(["ref_date", cfg.index_col])
+            pp_df = pp_series.select([
+                "ref_date",
+                pl.col("employment").alias(emp_col),
+            ])
         levels = levels.join(pp_df, on="ref_date", how="left")
 
     levels = levels.sort("ref_date")
@@ -89,8 +93,9 @@ def load_data(
         pl.col("qcew_nsa_index").log().diff().alias("g_qcew"),
     ]
     for cfg in providers:
+        emp_col = f"{cfg.name.lower()}_employment"
         growth_exprs.append(
-            pl.col(cfg.index_col).log().diff().alias(f"g_{cfg.name.lower()}")
+            pl.col(emp_col).log().diff().alias(f"g_{cfg.name.lower()}")
         )
 
     growth = levels.with_columns(growth_exprs).slice(1)  # first row has no growth
@@ -169,6 +174,7 @@ def load_data(
     pp_data: list[dict] = []
     for p, cfg in enumerate(providers):
         g_col = f"g_{cfg.name.lower()}"
+        emp_col = f"{cfg.name.lower()}_employment"
         g_pp_p = growth[g_col].to_numpy().astype(float)
         pp_obs_p = np.where(np.isfinite(g_pp_p))[0]
 
@@ -177,24 +183,20 @@ def load_data(
             "config": cfg,
             "g_pp": g_pp_p,
             "pp_obs": pp_obs_p,
-            "index_col": cfg.index_col,
+            "emp_col": emp_col,
             "color": PP_COLORS[p % len(PP_COLORS)],
         }
 
-        # Load birth-rate data if specified (CSV or Parquet)
-        if cfg.births_file and cfg.births_col:
-            births_raw = read_provider_table(DATA_DIR / cfg.births_file)
-            if births_raw is not None and cfg.births_col in births_raw.columns:
-                births_df = births_raw.select(["ref_date", cfg.births_col])
-                births_joined = pl.DataFrame({"ref_date": dates}).join(
-                    births_df, on="ref_date", how="left"
-                )
-                births_arr = births_joined[cfg.births_col].to_numpy().astype(float)
-                entry["births"] = births_arr
-                entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
-            else:
-                entry["births"] = None
-                entry["births_obs"] = None
+        # Auto-detect birth_rate from provider file
+        pp_series = load_provider_series(cfg)
+        if pp_series is not None and "birth_rate" in pp_series.columns:
+            births_df = pp_series.select(["ref_date", "birth_rate"])
+            births_joined = pl.DataFrame({"ref_date": dates}).join(
+                births_df, on="ref_date", how="left"
+            )
+            births_arr = births_joined["birth_rate"].to_numpy().astype(float)
+            entry["births"] = births_arr
+            entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
         else:
             entry["births"] = None
             entry["births_obs"] = None

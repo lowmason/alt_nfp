@@ -15,12 +15,11 @@ import polars as pl
 from .config import (
     BD_QCEW_LAG,
     CYCLICAL_INDICATORS,
-    DATA_DIR,
     PP_COLORS,
     ProviderConfig,
 )
 from .data import _load_cyclical_indicators
-from .ingest.payroll import read_provider_table
+from .ingest.payroll import load_provider_series
 
 
 def panel_to_model_data(
@@ -162,9 +161,9 @@ def panel_to_model_data(
     pp_data: list[dict] = []
     for p, cfg in enumerate(providers):
         source_name = cfg.name.lower()
+        emp_col = f"{cfg.name.lower()}_employment"
         g_pp = _growth_series(source_name)
         if not np.any(np.isfinite(g_pp)):
-            # Panel may use exact name
             g_pp = _growth_series(cfg.name)
         pp_obs = np.where(np.isfinite(g_pp))[0]
         entry: dict = {
@@ -172,22 +171,19 @@ def panel_to_model_data(
             "config": cfg,
             "g_pp": g_pp,
             "pp_obs": pp_obs,
-            "index_col": cfg.index_col,
+            "emp_col": emp_col,
             "color": PP_COLORS[p % len(PP_COLORS)],
         }
-        if cfg.births_file and cfg.births_col:
-            births_raw = read_provider_table(DATA_DIR / cfg.births_file)
-            if births_raw is not None and cfg.births_col in births_raw.columns:
-                births_df = births_raw.select(["ref_date", cfg.births_col])
-                births_joined = pl.DataFrame({"ref_date": dates}).join(
-                    births_df, on="ref_date", how="left"
-                )
-                births_arr = births_joined[cfg.births_col].to_numpy().astype(float)
-                entry["births"] = births_arr
-                entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
-            else:
-                entry["births"] = None
-                entry["births_obs"] = None
+
+        pp_series = load_provider_series(cfg)
+        if pp_series is not None and "birth_rate" in pp_series.columns:
+            births_df = pp_series.select(["ref_date", "birth_rate"])
+            births_joined = pl.DataFrame({"ref_date": dates}).join(
+                births_df, on="ref_date", how="left"
+            )
+            births_arr = births_joined["birth_rate"].to_numpy().astype(float)
+            entry["births"] = births_arr
+            entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
         else:
             entry["births"] = None
             entry["births_obs"] = None
@@ -337,6 +333,6 @@ def _build_levels_from_growth(
         "qcew_nsa_index": qcew_nsa_index,
     }
     for pp in pp_data:
-        d[pp["index_col"]] = cum_level(pp["g_pp"])
+        d[pp["emp_col"]] = cum_level(pp["g_pp"])
 
     return pl.DataFrame(d)
