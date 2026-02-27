@@ -1,5 +1,9 @@
 """Static reference tables for BLS industry hierarchy, revision schedules, and geography."""
 
+from .benchmark_revisions import (
+    BENCHMARK_REVISIONS,
+    get_benchmark_revision,
+)
 from .geography import (
     DIVISION_NAMES,
     FIPS_TO_DIVISION,
@@ -35,6 +39,7 @@ from .revision_schedules import (
 )
 
 __all__ = [
+    'BENCHMARK_REVISIONS',
     'CES_REVISIONS',
     'CES_SERIES_MAP',
     'DIVISION_NAMES',
@@ -51,6 +56,7 @@ __all__ = [
     'STATES',
     'en_series_id',
     'en_series_id_for_state',
+    'get_benchmark_revision',
     'get_ces_vintage_date',
     'get_default_calendar',
     'get_domain_codes',

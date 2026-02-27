@@ -30,6 +30,12 @@ from .sampling import (
 )
 from .sensitivity import run_sensitivity
 from .panel_adapter import panel_to_model_data
+from .benchmark import (
+    decompose_benchmark_revision,
+    extract_benchmark_revision,
+    load_anchor_level_from_vintage_store,
+    summarize_revision_posterior,
+)
 
 # New data infrastructure (v4)
 from .lookups import INDUSTRY_HIERARCHY, QCEW_REVISIONS, CES_REVISIONS
@@ -52,6 +58,11 @@ __all__ = [
     "run_backtest",
     "run_sensitivity",
     "panel_to_model_data",
+    # Benchmark prediction
+    "decompose_benchmark_revision",
+    "extract_benchmark_revision",
+    "load_anchor_level_from_vintage_store",
+    "summarize_revision_posterior",
     # New data infrastructure
     "INDUSTRY_HIERARCHY",
     "QCEW_REVISIONS",
