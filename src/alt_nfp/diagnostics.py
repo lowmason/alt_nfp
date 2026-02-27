@@ -1,7 +1,15 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.diagnostics — Sampling diagnostics, source contributions,
-#                        divergence visualisation
-# ---------------------------------------------------------------------------
+"""Sampling diagnostics, source contributions, and divergence visualisation.
+
+After MCMC sampling this module provides:
+
+* :func:`print_diagnostics` — structured console summary of convergence
+  metrics (R-hat, ESS, divergences) and key parameter estimates.
+* :func:`print_source_contributions` — precision-weighted information
+  budget showing each data source's contribution to the posterior.
+* :func:`plot_divergences` — bivariate scatter-plots highlighting
+  divergent transitions for geometric-pathology diagnosis.
+"""
+
 from __future__ import annotations
 
 import arviz as az
@@ -78,6 +86,7 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
 
 
 def _print_bd_summary(idata: az.InferenceData) -> None:
+    """Print posterior summary of structural birth/death parameters."""
     phi_0 = idata.posterior["phi_0"].values.flatten()
     phi_1 = idata.posterior["phi_1"].values.flatten()
     phi_2 = idata.posterior["phi_2"].values.flatten()
@@ -120,6 +129,7 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
 
 
 def _print_ces_summary(idata: az.InferenceData) -> None:
+    """Print posterior summary of CES observation parameters."""
     a = idata.posterior["alpha_ces"].values.flatten()
     l = idata.posterior["lambda_ces"].values.flatten()
     s_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, 3)
@@ -142,6 +152,7 @@ def _print_ces_summary(idata: az.InferenceData) -> None:
 
 
 def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
+    """Print posterior summary of payroll-provider observation parameters."""
     print("\nPP signal loadings (\u03bb), bias (\u03b1), and noise (\u03c3):")
     for pp in pp_data:
         name = pp["config"].name.lower()

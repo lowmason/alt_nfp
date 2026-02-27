@@ -1,6 +1,16 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.sampling — MCMC sampling
-# ---------------------------------------------------------------------------
+"""MCMC sampling utilities.
+
+Provides :func:`sample_model` which attempts sampling with the *nutpie*
+backend (fast C++/Rust NUTS implementation preferred on Apple Silicon) and
+falls back to PyMC's built-in NUTS sampler when *nutpie* is unavailable.
+
+Three preset configurations are exported for different use cases:
+
+* :data:`DEFAULT_SAMPLER_KWARGS` — full production run (8 000 draws).
+* :data:`MEDIUM_SAMPLER_KWARGS` — sensitivity sweeps (4 000 draws).
+* :data:`LIGHT_SAMPLER_KWARGS` — backtest loops (~30 s / run).
+"""
+
 from __future__ import annotations
 
 import arviz as az

@@ -198,7 +198,7 @@ def load_ces_vintages(path: Path) -> pl.DataFrame:
 
 def ingest_ces_national(
     vintage_dir: Path | None = None,
-    start_year: int = 2010,
+    start_year: int = 2003,
     end_year: int | None = None,
     client: BLSHttpClient | None = None,
 ) -> pl.DataFrame:
@@ -209,7 +209,7 @@ def ingest_ces_national(
     vintage_dir : Path, optional
         Directory containing ces_vintages.parquet.
     start_year : int
-        First year for API fetch (default 2010).
+        First year for API fetch (default 2003).
     end_year : int, optional
         Last year for API fetch. Defaults to current year.
     client : BLSHttpClient or None

@@ -1,6 +1,15 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.forecast — Forward simulation and forecast plots
-# ---------------------------------------------------------------------------
+"""Forward simulation and employment forecast plots.
+
+:func:`forecast_and_plot` draws forward trajectories from the posterior,
+propagating the AR(1) continuing-units growth, structural BD offset
+(with QCEW lag error-correction), and last-year Fourier seasonal
+coefficients.  Outputs include:
+
+* Index-level forecast (SA and NSA) with 80 % HDI fan charts.
+* Month-over-month jobs-added forecast with annotated point estimates.
+* Console tables of index levels, jobs added, and growth rates.
+"""
+
 from __future__ import annotations
 
 from datetime import date
@@ -171,6 +180,7 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
 
 
 def _print_index_table(dates, forecast_dates, sa_h, nsa_h, sa_f, nsa_f):
+    """Print console table of SA/NSA index levels (historical tail + forecast)."""
     print("=" * 72)
     print("FORECAST: SA & NSA Index to 2026-01-12")
     print("=" * 72)
@@ -197,6 +207,7 @@ def _print_index_table(dates, forecast_dates, sa_h, nsa_h, sa_f, nsa_f):
 
 
 def _print_jobs_table(dates, forecast_dates, c_sa_h, c_nsa_h, c_sa_f, c_nsa_f):
+    """Print console table of month-over-month jobs added (thousands)."""
     print("\n" + "=" * 84)
     print("FORECAST: Jobs added (month-over-month change, thousands)")
     print("  Positive = jobs added, negative = jobs lost.  Base ref: CES at index 100.")
@@ -224,6 +235,7 @@ def _print_jobs_table(dates, forecast_dates, c_sa_h, c_nsa_h, c_sa_f, c_nsa_f):
 
 
 def _print_growth_table(forecast_dates, g_sa_fwd, g_nsa_fwd):
+    """Print console table of forecast monthly growth rates."""
     print("\n" + "=" * 72)
     print("FORECAST: Monthly Growth Rates")
     print("=" * 72)

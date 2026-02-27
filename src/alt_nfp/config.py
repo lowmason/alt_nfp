@@ -1,6 +1,17 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.config — Provider configuration and project constants
-# ---------------------------------------------------------------------------
+"""Provider configuration, project paths, and model constants.
+
+This module is the single source of truth for:
+
+* **File-system paths** — ``BASE_DIR``, ``DATA_DIR``, ``OUTPUT_DIR``.
+* **Model hyper-parameters** — QCEW noise floors, BD lag, Fourier harmonic
+  count, cyclical indicator specs.
+* **Provider registry** — the :data:`PROVIDERS` list of
+  :class:`ProviderConfig` entries that drive the entire pipeline.
+
+Adding a new payroll provider requires only a new ``ProviderConfig`` entry
+in :data:`PROVIDERS`.  The model, diagnostics, and plots adapt automatically.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,9 +1,17 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.sensitivity — QCEW sigma sensitivity analysis
-# ---------------------------------------------------------------------------
-"""Run the v3 model with several QCEW noise levels (0.5x, 1x, 2x).
-Compare key parameters and precision budgets to check whether calibrated
-sigmas drive conclusions."""
+"""QCEW observation-noise sensitivity analysis.
+
+Runs the state-space model under multiple QCEW noise configurations
+(default: 0.5x, 1x, 2x baseline) using
+:data:`~alt_nfp.sampling.MEDIUM_SAMPLER_KWARGS`.  For each configuration
+the sweep records:
+
+* Posterior summaries of all key parameters (BD, CES, provider-specific).
+* Precision-weighted information budgets showing how the QCEW share shifts.
+* A stability verdict: if key parameters (phi_0, alpha_ces) remain within
+  tolerance the calibrated sigmas are not driving conclusions.
+
+Outputs include a grouped bar-chart comparing parameters across configs.
+"""
 
 from __future__ import annotations
 

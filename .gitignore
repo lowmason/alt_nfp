@@ -72,3 +72,6 @@ coverage.xml
 
 # Ruff
 .ruff_cache/
+
+# MkDocs build output
+site/

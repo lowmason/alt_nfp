@@ -130,7 +130,7 @@ def fetch_ces_state_current(
 
 def ingest_ces_state(
     vintage_dir: Path | None = None,
-    start_year: int = 2010,
+    start_year: int = 2003,
     end_year: int | None = None,
     states: list[str] | None = None,
     client: BLSHttpClient | None = None,
@@ -142,7 +142,7 @@ def ingest_ces_state(
     vintage_dir : Path, optional
         Directory containing state vintage parquets (format TBD).
     start_year : int
-        First year for data fetch (default 2010).
+        First year for data fetch (default 2003).
     end_year : int, optional
         Last year for data fetch. Defaults to current year.
     states : list[str] or None

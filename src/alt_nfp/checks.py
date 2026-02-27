@@ -1,6 +1,17 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.checks — Prior / posterior predictive checks, LOO-CV
-# ---------------------------------------------------------------------------
+"""Prior/posterior predictive checks and LOO-CV diagnostics.
+
+Implements the predictive-check steps of the Bayesian workflow
+(Gabry et al. 2019):
+
+* :func:`run_prior_predictive_checks` — validates that priors produce
+  data in a plausible range before fitting.
+* :func:`run_posterior_predictive_checks` — density overlays and
+  test-statistic comparisons (skewness, lag-1 ACF) between replicated
+  and observed data.
+* :func:`run_loo_cv` — Pareto-smoothed importance-sampling LOO
+  cross-validation with per-source k-hat diagnostics.
+"""
+
 from __future__ import annotations
 
 import arviz as az

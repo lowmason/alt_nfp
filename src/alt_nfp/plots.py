@@ -1,6 +1,17 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.plots — Growth-rate, seasonal, reconstructed-index, and BD plots
-# ---------------------------------------------------------------------------
+"""Core result plots: growth rates, seasonal patterns, index reconstruction,
+and birth/death diagnostics.
+
+Visualisations produced:
+
+* :func:`plot_growth_and_seasonal` — four-panel figure: SA total growth,
+  NSA total growth, continuing-units growth vs providers, and Fourier
+  seasonal pattern comparison.
+* :func:`plot_reconstructed_index` — latent SA/NSA index overlaid on
+  observed CES, QCEW, and provider series.
+* :func:`plot_bd_diagnostics` — structural BD offset time-series,
+  covariate scatter-plots, and decomposition.
+"""
+
 from __future__ import annotations
 
 import arviz as az
@@ -330,5 +341,6 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
 
 
 def _year_axis(ax) -> None:
+    """Configure *ax* x-axis with yearly tick marks."""
     ax.xaxis.set_major_locator(mdates.YearLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))

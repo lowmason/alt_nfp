@@ -3,7 +3,7 @@
 Merges two sources:
 
 1. **Historical dates** from ``release_dates.parquet`` (if available) —
-   the scraper pipeline covers CES, SAE, and QCEW going back to ~2010.
+   the scraper pipeline covers CES, SAE, and QCEW going back to ~2003.
 2. **Forward-looking dates** from the hard-coded dicts in
    :mod:`alt_nfp.lookups.publication_dates`.
 

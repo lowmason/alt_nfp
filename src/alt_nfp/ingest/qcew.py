@@ -430,7 +430,7 @@ def load_qcew_vintages(path: Path) -> pl.DataFrame:
 
 def ingest_qcew(
     vintage_dir: Path | None = None,
-    start_year: int = 2010,
+    start_year: int = 2003,
     end_year: int | None = None,
     include_states: bool = False,
     state_fips_list: list[str] | None = None,
@@ -443,7 +443,7 @@ def ingest_qcew(
     vintage_dir : Path, optional
         Directory containing qcew_vintages.parquet.
     start_year : int
-        First year for API fetch (default 2010).
+        First year for API fetch (default 2003).
     end_year : int, optional
         Last year for API fetch. Defaults to current year.
     include_states : bool

@@ -1,6 +1,14 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.residuals — Standardised residual plots
-# ---------------------------------------------------------------------------
+"""Standardised residual diagnostics by data source.
+
+:func:`plot_residuals` computes and plots standardised residuals for every
+data source (CES vintage-specific, each payroll provider, QCEW).  Under a
+well-specified model the residuals should be approximately iid *N*(0, 1);
+temporal patterns or heavy tails signal misfit.
+
+For providers with AR(1) error structures the residuals are pre-whitened
+(innovation residuals) so that serial correlation has been removed.
+"""
+
 from __future__ import annotations
 
 import arviz as az

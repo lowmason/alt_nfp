@@ -1,8 +1,22 @@
-# ---------------------------------------------------------------------------
-# alt_nfp — Bayesian state-space model for U.S. employment growth
-# ---------------------------------------------------------------------------
-"""QCEW-anchored nowcasting model with config-driven providers, provider-
-specific error structures, and a structural birth/death model."""
+"""Bayesian state-space model for nowcasting U.S. nonfarm payroll employment.
+
+``alt_nfp`` fuses three families of data source—BLS Current Employment
+Statistics (CES), Quarterly Census of Employment and Wages (QCEW), and
+private payroll-provider indices—inside a single PyMC state-space model.
+QCEW serves as the near-census truth anchor; CES and payroll providers
+contribute higher-frequency but noisier signals.
+
+Key capabilities:
+
+* **Config-driven providers** — add a new payroll vendor by appending a
+  :class:`ProviderConfig` to :data:`PROVIDERS`.
+* **Structural birth/death model** — time-varying BD offset driven by
+  birth-rate and lagged QCEW covariates.
+* **Vintage-tracked observation panel** — ``ingest`` and ``vintages``
+  sub-packages manage real-time data revisions.
+* **Bayesian workflow toolkit** — prior/posterior predictive checks,
+  LOO-CV, residual diagnostics, sensitivity sweeps, and backtests.
+"""
 
 from .backtest import run_backtest
 from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, PROVIDERS, ProviderConfig

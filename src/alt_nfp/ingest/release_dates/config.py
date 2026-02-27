@@ -10,7 +10,7 @@ from pathlib import Path
 from alt_nfp.config import DATA_DIR
 
 BASE_URL = 'https://www.bls.gov'
-START_YEAR = 2010
+START_YEAR = 2003
 
 # Output paths
 RELEASES_DIR: Path = DATA_DIR / 'raw' / 'releases'

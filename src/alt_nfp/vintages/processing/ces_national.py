@@ -35,7 +35,7 @@ def _build_schema(path: Path) -> tuple[dict[str, pl.DataType], list[str], dict[s
     schema: dict[str, pl.DataType] = {'year': pl.UInt16, 'month': pl.UInt8}
     schema.update({col: pl.Float64 for col in columns if col not in schema})
 
-    years = list(range(2010, 2030))
+    years = list(range(2003, 2030))
     month_names = [
         'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
@@ -97,7 +97,7 @@ def read_triangular_ces(
             ref_year=pl.col('year'),
             ref_month=pl.col('month'),
         )
-        .filter(pl.col('ref_date').gt(pl.date(2009, 12, 12)))
+        .filter(pl.col('ref_date').gt(pl.date(2002, 12, 12)))
         .select(cs.starts_with('ref_'), cs.starts_with('emp_'))
     )
 

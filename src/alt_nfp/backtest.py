@@ -1,10 +1,17 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.backtest — Nowcast backtest (CES-censoring experiment)
-# ---------------------------------------------------------------------------
-"""For each of the last *n* months: censor CES from that month onward,
-run the v3 model with lighter sampling, and compare the latent-state
-nowcast to the actual CES release.  Quantifies PP's operational
-forecasting value."""
+"""Nowcast backtest via CES-censoring experiment.
+
+For each of the last *n* months the backtest:
+
+1. Censors CES observations from that month onward (simulating the
+   real-time information set available before the BLS release).
+2. Fits the state-space model with lighter sampling
+   (:data:`~alt_nfp.sampling.LIGHT_SAMPLER_KWARGS`).
+3. Compares the latent-state nowcast to the actual CES release.
+
+This quantifies the operational forecasting value added by payroll-provider
+data.  Results are reported both as growth-rate errors (percentage points)
+and as jobs-added errors (thousands).
+"""
 
 from __future__ import annotations
 

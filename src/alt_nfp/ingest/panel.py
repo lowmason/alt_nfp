@@ -30,7 +30,7 @@ def build_panel(
     use_legacy: bool = False,
     use_api: bool = True,
     providers: list[ProviderConfig] | None = None,
-    start_year: int = 2010,
+    start_year: int = 2003,
     end_year: int | None = None,
 ) -> pl.DataFrame:
     """Build a unified observation panel from all data sources.
@@ -48,7 +48,7 @@ def build_panel(
     providers : list[ProviderConfig], optional
         Provider list. Defaults to PROVIDERS from config.
     start_year : int
-        First year for data (default 2010).
+        First year for data (default 2003).
     end_year : int, optional
         Last year for data. Defaults to current year.
 

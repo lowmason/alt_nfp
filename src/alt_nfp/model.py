@@ -1,8 +1,20 @@
-# ---------------------------------------------------------------------------
-# alt_nfp.model — PyMC model specification
-# ---------------------------------------------------------------------------
-"""QCEW-anchored state-space model with config-driven providers and
-structural time-varying birth/death."""
+"""PyMC state-space model for employment growth nowcasting.
+
+Builds a hierarchical Bayesian model with the following components:
+
+1. **Latent continuing-units growth** — AR(1) process with mean reversion.
+2. **Fourier seasonal** — annually-evolving harmonic amplitudes via
+   Gaussian random walk.
+3. **Structural birth/death** — time-varying offset driven by birth-rate,
+   lagged QCEW BD proxy, and optional cyclical demand indicators.
+4. **QCEW likelihood** — near-census truth anchor with fixed observation
+   noise differentiated by quarter-end (M3) vs retrospective-UI (M1-2)
+   months.
+5. **CES likelihood** — vintage-specific noise (1st print, 2nd print,
+   final) with shared bias/loading parameters.
+6. **Provider likelihoods** — config-driven loop supporting both iid and
+   AR(1) measurement-error structures.
+"""
 
 from __future__ import annotations
 
