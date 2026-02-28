@@ -15,9 +15,9 @@ from __future__ import annotations
 import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
+import polars as pl
 
 from .config import OUTPUT_DIR, SIGMA_QCEW_M3, SIGMA_QCEW_M12
-
 
 # =========================================================================
 # Parameter summary & convergence
@@ -110,8 +110,10 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
     print(f"  \u03c3_bd (innovation):  {sigma_bd.mean() * 100:.4f}%")
 
     if "phi_3" in idata.posterior:
+        from .config import CYCLICAL_INDICATORS
+
         phi_3 = idata.posterior["phi_3"].values  # (chains, draws, n_cyclical)
-        cyclical_labels = ['claims', 'nfci', 'biz_apps']
+        cyclical_labels = [spec['name'] for spec in CYCLICAL_INDICATORS]
         n_cyc = phi_3.shape[-1]
         for i in range(n_cyc):
             v = phi_3[:, :, i].flatten()
@@ -257,6 +259,107 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
     _row("QCEW (M1-2)", n_qcew_m12, prec_qcew_m12, prec_qcew_m12 * n_qcew_m12)
     print("-" * 72)
     print(f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}")
+
+
+def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFrame:
+    """Compute precision-weighted information budget as a structured DataFrame.
+
+    Returns a DataFrame with columns:
+        source, n_obs, precision_per_obs, total_precision, share,
+        lambda_mean, alpha_mean
+    """
+    pp_data = data["pp_data"]
+
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values
+    lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
+    alpha_ces = float(idata.posterior["alpha_ces"].values.flatten().mean())
+
+    prec_qcew_m3 = 1.0 / SIGMA_QCEW_M3**2
+    prec_qcew_m12 = 1.0 / SIGMA_QCEW_M12**2
+
+    qcew_is_m3 = data["qcew_is_m3"]
+    n_qcew_m3 = int(qcew_is_m3.sum())
+    n_qcew_m12 = len(data["qcew_obs"]) - n_qcew_m3
+
+    rows: list[dict] = []
+
+    # CES vintage-specific precision
+    vintage_labels = ["1st", "2nd", "Final"]
+    for v in range(3):
+        g_sa_v = data["g_ces_sa_by_vintage"][v]
+        g_nsa_v = data["g_ces_nsa_by_vintage"][v]
+        n_sa = int(np.sum(np.isfinite(g_sa_v)))
+        n_nsa = int(np.sum(np.isfinite(g_nsa_v)))
+
+        sig_sa_v = float(sigma_ces_sa[:, :, v].flatten().mean())
+        sig_nsa_v = float(sigma_ces_nsa[:, :, v].flatten().mean())
+
+        if n_sa > 0:
+            prec_sa = lambda_ces**2 / sig_sa_v**2
+            rows.append({
+                "source": f"CES SA ({vintage_labels[v]})",
+                "n_obs": n_sa,
+                "precision_per_obs": prec_sa,
+                "total_precision": prec_sa * n_sa,
+                "lambda_mean": lambda_ces,
+                "alpha_mean": alpha_ces,
+            })
+        if n_nsa > 0:
+            prec_nsa = lambda_ces**2 / sig_nsa_v**2
+            rows.append({
+                "source": f"CES NSA ({vintage_labels[v]})",
+                "n_obs": n_nsa,
+                "precision_per_obs": prec_nsa,
+                "total_precision": prec_nsa * n_nsa,
+                "lambda_mean": lambda_ces,
+                "alpha_mean": alpha_ces,
+            })
+
+    # Provider precision
+    for pp in pp_data:
+        name = pp["config"].name.lower()
+        sig_p = float(idata.posterior[f"sigma_pp_{name}"].values.flatten().mean())
+        lam_p = float(idata.posterior[f"lam_{name}"].values.flatten().mean())
+        alp_p = float(idata.posterior[f"alpha_{name}"].values.flatten().mean())
+        n_obs = len(pp["pp_obs"])
+        prec_p = lam_p**2 / sig_p**2
+        if pp["config"].error_model == "ar1":
+            rho_p = float(idata.posterior[f"rho_{name}"].values.flatten().mean())
+            prec_p = lam_p**2 * (1 - rho_p**2) / sig_p**2
+        rows.append({
+            "source": pp["name"],
+            "n_obs": n_obs,
+            "precision_per_obs": prec_p,
+            "total_precision": prec_p * n_obs,
+            "lambda_mean": lam_p,
+            "alpha_mean": alp_p,
+        })
+
+    # QCEW precision
+    if n_qcew_m3 > 0:
+        rows.append({
+            "source": "QCEW (M3)",
+            "n_obs": n_qcew_m3,
+            "precision_per_obs": prec_qcew_m3,
+            "total_precision": prec_qcew_m3 * n_qcew_m3,
+            "lambda_mean": 1.0,
+            "alpha_mean": 0.0,
+        })
+    if n_qcew_m12 > 0:
+        rows.append({
+            "source": "QCEW (M1-2)",
+            "n_obs": n_qcew_m12,
+            "precision_per_obs": prec_qcew_m12,
+            "total_precision": prec_qcew_m12 * n_qcew_m12,
+            "lambda_mean": 1.0,
+            "alpha_mean": 0.0,
+        })
+
+    df = pl.DataFrame(rows)
+    total = df["total_precision"].sum()
+    df = df.with_columns((pl.col("total_precision") / total).alias("share"))
+    return df
 
 
 # =========================================================================

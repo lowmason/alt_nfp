@@ -8,7 +8,7 @@ build_model(), diagnostics, and plots.
 from __future__ import annotations
 
 import warnings
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import polars as pl
@@ -22,10 +22,14 @@ from .config import (
 )
 from .ingest.payroll import load_provider_series
 
+# Provider data is typically available ~3 weeks after the reference period.
+_PROVIDER_PUBLICATION_LAG_WEEKS = 3
+
 _CYCLICAL_PUBLICATION_LAGS: dict[str, int] = {
-    "claims": 1,
-    "nfci": 1,
-    "biz_apps": 2,
+    "claims": 1,      # Weekly initial jobless claims — ~1 week lag, rounded to 1 month
+    "nfci": 1,         # Chicago Fed NFCI — ~1 week lag, rounded to 1 month
+    "biz_apps": 2,     # Census Business Formation Statistics — ~2 month lag
+    "jolts": 2,        # BLS JOLTS job openings — ~2 month lag
 }
 
 
@@ -214,6 +218,14 @@ def panel_to_model_data(
                 births_df, on="ref_date", how="left"
             )
             births_arr = births_joined["birth_rate"].to_numpy().astype(float)
+            # Censor birth rate data not yet published as of the as_of date.
+            # Provider data is available ~3 weeks after the reference period.
+            if as_of is not None:
+                lag = timedelta(weeks=_PROVIDER_PUBLICATION_LAG_WEEKS)
+                for i, d in enumerate(dates):
+                    if d + lag > as_of:
+                        births_arr[i:] = np.nan
+                        break
             entry["births"] = births_arr
             entry["births_obs"] = np.where(np.isfinite(births_arr))[0]
         else:
@@ -298,11 +310,12 @@ def panel_to_model_data(
         f"bd_qcew_lagged {n_bd_qcew} obs "
         f"(L={BD_QCEW_LAG}mo, mean={bd_qcew_mean * 100:.4f}%)"
     )
-    for key in ["claims_c", "nfci_c", "biz_apps_c"]:
+    for spec in CYCLICAL_INDICATORS:
+        key = f"{spec['name']}_c"
         arr = cyclical.get(key)
         if arr is not None:
-            n_obs = int(np.sum(np.isfinite(arr)))
-            print(f"  Cyclical {key}: {n_obs} obs")
+            n_nonzero = int(np.sum(arr != 0.0))
+            print(f"  Cyclical {key}: {n_nonzero} obs")
         else:
             print(f"  Cyclical {key}: not available")
     print(f"  CES SA  mean growth: {np.nanmean(g_ces_sa) * 100:+.4f}%/mo")

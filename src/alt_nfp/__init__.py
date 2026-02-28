@@ -19,6 +19,7 @@ Key capabilities:
 """
 
 from .backtest import run_backtest
+from .diagnostics import compute_precision_budget
 from .config import (
     BASE_DIR,
     DATA_DIR,
@@ -76,6 +77,7 @@ __all__ = [
     "MEDIUM_SAMPLER_KWARGS",
     "run_backtest",
     "run_sensitivity",
+    "compute_precision_budget",
     # Benchmark prediction (Phase 1)
     "decompose_benchmark_revision",
     "extract_benchmark_revision",

@@ -30,6 +30,7 @@ from alt_nfp.benchmark import (
     summarize_revision_posterior,
 )
 from alt_nfp.config import OUTPUT_DIR, PROVIDERS
+from alt_nfp.diagnostics import compute_precision_budget, print_source_contributions
 from alt_nfp.ingest import build_panel
 from alt_nfp.lookups.benchmark_revisions import BENCHMARK_REVISIONS
 from alt_nfp.panel_adapter import panel_to_model_data
@@ -161,6 +162,14 @@ def main(idata_path: Path | None = None) -> None:
         print(f"  BD accumulation:             {bd_mean:+,.0f} ({pct_bd:+.0f}%)")
     except (ValueError, KeyError) as e:
         print(f"\nDecomposition for {latest} failed: {e}")
+
+    # --- Precision budget ---
+    print()
+    print_source_contributions(idata, data)
+    budget_df = compute_precision_budget(idata, data)
+    budget_path = OUTPUT_DIR / "precision_budget.parquet"
+    budget_df.write_parquet(str(budget_path))
+    print(f"\nPrecision budget saved to {budget_path}")
 
     # --- Plot: posterior density for latest two years with actuals ---
     plot_years = [y for y in years if y in results][-2:]

@@ -2,14 +2,14 @@
 
 Covers:
 - horizon_to_as_of mapping
-- as_of censoring in panel_to_model_data
+- as_of censoring in panel_to_model_data (CES, QCEW, providers, cyclical, births)
 - Evaluation metrics computation
 - Comparative benchmarks
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import polars as pl
@@ -25,7 +25,6 @@ from alt_nfp.benchmark_backtest import (
     horizon_to_as_of,
 )
 from alt_nfp.lookups.benchmark_revisions import BENCHMARK_REVISIONS
-
 
 # ── horizon_to_as_of tests ──────────────────────────────────────────────
 
@@ -268,3 +267,146 @@ class TestAsOfCensoring:
         assert len(data_asof["ces_sa_obs"]) > len(data_censor["ces_sa_obs"]), (
             "as_of should supersede censor_ces_from — later as_of keeps more obs"
         )
+
+    def _make_panel_with_provider(self, n_months: int = 36) -> pl.DataFrame:
+        """Build a panel with CES, QCEW, and a fake provider source."""
+        from alt_nfp.ingest.base import PANEL_SCHEMA
+
+        base = date(2023, 1, 1)
+        rows: list[dict] = []
+        for i in range(n_months):
+            m = base.month + i
+            year = base.year + (m - 1) // 12
+            month = ((m - 1) % 12) + 1
+            period = date(year, month, 1)
+
+            # CES SA
+            ces_pub = date(year + (month // 12), (month % 12) + 1, 7)
+            rows.append({
+                "period": period,
+                "geographic_type": "national",
+                "geographic_code": "US",
+                "industry_code": "05",
+                "industry_level": "supersector",
+                "source": "ces_sa",
+                "source_type": "official_sa",
+                "growth": 0.001,
+                "employment_level": 150_000.0 + i * 100,
+                "is_seasonally_adjusted": True,
+                "vintage_date": ces_pub,
+                "revision_number": 0,
+                "is_final": False,
+                "publication_lag_months": 1,
+                "coverage_ratio": 1.0,
+            })
+
+            # QCEW
+            q = (month - 1) // 3 + 1
+            q_end_month = q * 3
+            pub_offset = 5
+            qcew_pub_month = q_end_month + pub_offset
+            qcew_pub_year = year + (qcew_pub_month - 1) // 12
+            qcew_pub_month = ((qcew_pub_month - 1) % 12) + 1
+            qcew_pub = date(qcew_pub_year, qcew_pub_month, 15)
+            rows.append({
+                "period": period,
+                "geographic_type": "national",
+                "geographic_code": "US",
+                "industry_code": "05",
+                "industry_level": "supersector",
+                "source": "qcew",
+                "source_type": "census",
+                "growth": 0.0008,
+                "employment_level": 150_000.0 + i * 100,
+                "is_seasonally_adjusted": False,
+                "vintage_date": qcew_pub,
+                "revision_number": 0,
+                "is_final": True,
+                "publication_lag_months": 5,
+                "coverage_ratio": 1.0,
+            })
+
+            # Provider (published ~3 weeks after ref_date)
+            provider_pub = period + timedelta(weeks=3)
+            rows.append({
+                "period": period,
+                "geographic_type": "national",
+                "geographic_code": "US",
+                "industry_code": "05",
+                "industry_level": "supersector",
+                "source": "testprov",
+                "source_type": "payroll",
+                "growth": 0.0012,
+                "employment_level": 140_000.0 + i * 100,
+                "is_seasonally_adjusted": False,
+                "vintage_date": provider_pub,
+                "revision_number": 0,
+                "is_final": True,
+                "publication_lag_months": 1,
+                "coverage_ratio": None,
+            })
+
+        return pl.DataFrame(rows, schema=PANEL_SCHEMA)
+
+    def test_provider_censored_by_vintage_date(self):
+        """Provider rows with vintage_date > as_of should be excluded."""
+        from alt_nfp.panel_adapter import panel_to_model_data
+
+        panel = self._make_panel_with_provider(36)
+
+        # Check provider rows present in source panel
+        prov_rows = panel.filter(pl.col("source") == "testprov")
+        assert len(prov_rows) == 36
+
+        # Censor at mid-2024: should drop provider obs published after that
+        data_censored = panel_to_model_data(
+            panel, [], as_of=date(2024, 6, 15)
+        )
+        # The censored panel should have fewer rows overall
+        censored_panel = data_censored["panel"]
+        censored_prov = censored_panel.filter(pl.col("source") == "testprov")
+        assert len(censored_prov) < 36, (
+            f"Provider should be censored: {len(censored_prov)} rows"
+        )
+
+    def test_cyclical_indicators_masked_by_as_of(self):
+        """Cyclical indicators should be zeroed out for periods after as_of - lag."""
+        from alt_nfp.panel_adapter import panel_to_model_data
+
+        panel = self._make_panel(36)
+        # No as_of: all cyclical indicators should be loaded (or None if files missing)
+        data_full = panel_to_model_data(panel, [])
+
+        # With as_of in the middle of the range
+        as_of = date(2024, 6, 15)
+        data_censored = panel_to_model_data(panel, [], as_of=as_of)
+
+        # For each loaded cyclical indicator, the censored version should have
+        # at least as many zeros as the full version (since masking adds zeros)
+        from alt_nfp.config import CYCLICAL_INDICATORS
+
+        for spec in CYCLICAL_INDICATORS:
+            key = f"{spec['name']}_c"
+            full_arr = data_full.get(key)
+            cens_arr = data_censored.get(key)
+            if full_arr is None or cens_arr is None:
+                continue
+            full_zeros = int(np.sum(full_arr == 0.0))
+            cens_zeros = int(np.sum(cens_arr == 0.0))
+            assert cens_zeros >= full_zeros, (
+                f"{key}: censored should have >= zeros ({cens_zeros} vs {full_zeros})"
+            )
+
+    def test_later_as_of_gives_tighter_info_set(self):
+        """Later as_of date should yield weakly more observations across all sources."""
+        from alt_nfp.panel_adapter import panel_to_model_data
+
+        panel = self._make_panel(36)
+
+        early = panel_to_model_data(panel, [], as_of=date(2024, 1, 15))
+        late = panel_to_model_data(panel, [], as_of=date(2025, 6, 15))
+
+        # CES
+        assert len(early["ces_sa_obs"]) <= len(late["ces_sa_obs"])
+        # QCEW
+        assert len(early["qcew_obs"]) <= len(late["qcew_obs"])

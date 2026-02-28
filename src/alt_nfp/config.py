@@ -44,12 +44,23 @@ BD_QCEW_LAG = 6
 # Fourier seasonal expansion: number of harmonics (K)
 N_HARMONICS = 4
 
-# Cyclical indicators for structural BD model (demand-side covariates)
+# Cyclical indicators for structural BD model (demand-side covariates).
+# Each indicator is loaded from a CSV in DATA_DIR with columns (ref_date, <col>).
+# Weekly series are aggregated to monthly before centering.
 CYCLICAL_INDICATORS: list[dict] = [
     {'name': 'claims', 'file': 'claims_weekly.csv', 'col': 'claims', 'freq': 'weekly'},
     {'name': 'nfci', 'file': 'nfci.csv', 'col': 'nfci', 'freq': 'weekly'},
     {'name': 'biz_apps', 'file': 'business_applications.csv', 'col': 'applications',
      'freq': 'monthly'},
+    # JOLTS job openings (FRED: JTSJOL). Published ~2 months after reference
+    # period.  Revisions are small relative to cross-sectional variation (see
+    # JOLTS revision assessment in national_model_spec.md §2.3.1): mean absolute
+    # revision for 2003–2023 is ~1% of the level, well within the centered
+    # covariate range.  Final values with publication-lag censoring are sufficient;
+    # vintage tracking is not needed.  Openings chosen over hires (JTSHIL) as a
+    # leading demand indicator — openings lead the hiring cycle and show stronger
+    # covariance with the BD component in out-of-sample tests.
+    {'name': 'jolts', 'file': 'jolts_openings.csv', 'col': 'openings', 'freq': 'monthly'},
 ]
 
 # Plot colours — one per provider, cycled if >7 providers
@@ -114,6 +125,13 @@ class ProviderConfig:
 # ---------------------------------------------------------------------------
 # Active provider list — edit here to add/remove providers
 # ---------------------------------------------------------------------------
+
+# TODO: Representativeness correction (depends on private microdata repo)
+# Expected input: a single repr-corrected national composite per provider per month.
+# Computed externally as: y_p_t = Σ_c w_c_QCEW * y_p_c_t
+# where c indexes supersector × Census region cells.
+# Until that pipeline is available, the model consumes raw provider indices
+# (national aggregate only) without cell-level reweighting.
 
 PROVIDERS: list[ProviderConfig] = [
     ProviderConfig(

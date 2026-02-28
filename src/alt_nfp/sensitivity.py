@@ -124,8 +124,10 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
         ("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"),
     ])
     # Cyclical indicator loadings (phi_3) if available
-    cyclical_labels = ['claims', 'nfci', 'biz_apps']
-    cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']
+    from .config import CYCLICAL_INDICATORS
+
+    cyclical_labels = [spec['name'] for spec in CYCLICAL_INDICATORS]
+    cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]
     n_cyc = sum(
         1 for k in cyclical_keys
         if data.get(k) is not None and np.any(data[k] != 0.0)
