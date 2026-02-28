@@ -17,6 +17,7 @@ from pathlib import Path
 import polars as pl
 
 from alt_nfp.config import DATA_DIR
+from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +54,46 @@ COMBINED_SCHEMA: dict[str, pl.DataType] = {
 _DOMAIN_CODES = frozenset({'05', '06', '07', '08'})
 
 
+def _latest_ces_vintage_dates() -> pl.DataFrame:
+    """Return the latest (vintage_date, revision, benchmark_revision) per ref_date.
+
+    Reads ``vintage_dates.parquet``, filters to CES, and for each
+    ``ref_date`` keeps the row with the maximum ``vintage_date`` — i.e.
+    the most recent revision that has actually been published.
+    """
+    if not VINTAGE_DATES_PATH.exists():
+        return pl.DataFrame(
+            schema={
+                'ref_date': pl.Date,
+                'vintage_date': pl.Date,
+                'revision': pl.UInt8,
+                'benchmark_revision': pl.UInt8,
+            }
+        )
+
+    return (
+        pl.read_parquet(VINTAGE_DATES_PATH)
+        .filter(pl.col('publication') == 'ces')
+        .sort('vintage_date', descending=True)
+        .unique(subset=['ref_date'], keep='first')
+        .select(
+            'ref_date',
+            'vintage_date',
+            pl.col('revision').cast(pl.UInt8),
+            pl.col('benchmark_revision').cast(pl.UInt8),
+        )
+    )
+
+
 def _fetch_ces_releases() -> pl.DataFrame:
     """Fetch current CES national estimates from BLS.
 
     Tries the flat-file download first; falls back to the JSON API when
     an API key is available.
 
-    Returns a DataFrame in :data:`COMBINED_SCHEMA` with ``revision=0``
-    and ``vintage_date`` set to today.
+    Returns a DataFrame in :data:`COMBINED_SCHEMA` with ``vintage_date``,
+    ``revision``, and ``benchmark_revision`` sourced from
+    ``vintage_dates.parquet`` (the latest published revision per ref_date).
     """
     import os
 
@@ -104,26 +137,28 @@ def _fetch_ces_releases() -> pl.DataFrame:
         logger.warning('No CES data returned from BLS flat files')
         return pl.DataFrame(schema=COMBINED_SCHEMA)
 
-    today = date.today()
-    return raw.select(
-        source=pl.lit('ces'),
-        seasonally_adjusted=pl.col('is_seasonally_adjusted'),
-        geographic_type=pl.lit('national'),
-        geographic_code=pl.lit('00'),
-        industry_type=(
-            pl.when(pl.col('supersector_code') == '00')
-            .then(pl.lit('national'))
-            .when(pl.col('supersector_code').is_in(list(_DOMAIN_CODES)))
-            .then(pl.lit('domain'))
-            .otherwise(pl.lit('supersector'))
-        ),
-        industry_code=pl.col('supersector_code'),
-        ref_date=pl.col('date'),
-        vintage_date=pl.lit(today),
-        revision=pl.lit(0, pl.UInt8),
-        benchmark_revision=pl.lit(None, pl.UInt8),
-        employment=pl.col('value'),
-    ).cast(COMBINED_SCHEMA)
+    latest_vdates = _latest_ces_vintage_dates()
+
+    return (
+        raw.select(
+            source=pl.lit('ces'),
+            seasonally_adjusted=pl.col('is_seasonally_adjusted'),
+            geographic_type=pl.lit('national'),
+            geographic_code=pl.lit('00'),
+            industry_type=(
+                pl.when(pl.col('supersector_code') == '00')
+                .then(pl.lit('national'))
+                .when(pl.col('supersector_code').is_in(list(_DOMAIN_CODES)))
+                .then(pl.lit('domain'))
+                .otherwise(pl.lit('supersector'))
+            ),
+            industry_code=pl.col('supersector_code'),
+            ref_date=pl.col('date'),
+            employment=pl.col('value'),
+        )
+        .join(latest_vdates, on='ref_date', how='left')
+        .cast(COMBINED_SCHEMA)
+    )
 
 
 def build_releases(out_path: Path | None = None) -> pl.DataFrame:

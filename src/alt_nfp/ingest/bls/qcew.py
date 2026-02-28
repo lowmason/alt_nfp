@@ -226,7 +226,7 @@ def fetch_qcew_with_geography(
     pl.DataFrame
         Raw QCEW data with added ``geographic_type``, ``geographic_code``,
         and ``own_code`` columns. National rows have
-        ``geographic_type='national'`` and ``geographic_code='US'``;
+        ``geographic_type='national'`` and ``geographic_code='00'``;
         state rows have ``geographic_type='state'`` and
         ``geographic_code`` set to the 2-digit state FIPS.
     '''
@@ -286,7 +286,7 @@ def fetch_qcew_with_geography(
                         if len(nat) > 0:
                             nat = nat.with_columns(
                                 pl.lit('national').alias('geographic_type'),
-                                pl.lit('US').alias('geographic_code'),
+                                pl.lit('00').alias('geographic_code'),
                             )
                             parts.append(nat)
 

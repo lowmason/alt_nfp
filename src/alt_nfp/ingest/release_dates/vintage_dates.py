@@ -13,7 +13,7 @@ Revision semantics (publication-specific):
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -22,6 +22,10 @@ from alt_nfp.ingest.release_dates.config import RELEASE_DATES_PATH, VINTAGE_DATE
 
 CES_MONTHLY_REVISIONS = [0, 1, 2]
 SAE_MONTHLY_REVISIONS = [0, 1]
+
+# Years covered by the BLS archive scrape.  Ref_dates before this are filled
+# with first-Friday estimates via _generate_ces_pre_scrape_dates().
+_CES_SCRAPE_START_YEAR = 2008
 
 # CES Oct 2025: released with Nov 2025 (government shutdown).
 CES_OCT_2025_RELEASED_WITH_NOV_REF = date(2025, 10, 12)
@@ -47,6 +51,53 @@ SUPPLEMENTAL_RELEASE_DATES = [
     ('sae', date(2010, 2, 12), date(2010, 3, 25)),
     ('sae', date(2010, 3, 12), date(2010, 4, 15)),
 ]
+
+# US federal holidays that can land on the first Friday of a month.
+_NEW_YEARS_DAY = 1  # Jan 1
+_INDEPENDENCE_DAY_MONTH = 7  # Jul 4
+
+
+def _first_friday(year: int, month: int) -> date:
+    """Return the first Friday of a given month/year."""
+    d = date(year, month, 1)
+    days_ahead = (4 - d.weekday()) % 7  # 4 = Friday
+    return d + timedelta(days=days_ahead)
+
+
+def _ces_publication_date(ref_year: int, ref_month: int) -> date:
+    """Estimate the CES publication date for a reference month.
+
+    CES releases on the first Friday of the month *after* the reference
+    month.  When that Friday falls on Jan 1 or Jul 4, the release shifts
+    to the second Friday.
+    """
+    pub_month = ref_month + 1
+    pub_year = ref_year
+    if pub_month > 12:
+        pub_month = 1
+        pub_year += 1
+
+    friday = _first_friday(pub_year, pub_month)
+
+    if (friday.month == 1 and friday.day == _NEW_YEARS_DAY) or (
+        friday.month == _INDEPENDENCE_DAY_MONTH and friday.day == 4
+    ):
+        friday += timedelta(days=7)
+
+    return friday
+
+
+def _generate_ces_pre_scrape_dates() -> list[tuple[str, date, date]]:
+    """Generate (publication, ref_date, vintage_date) for CES months before
+    the BLS archive scrape coverage (2003-01 through 2007-12).
+    """
+    rows: list[tuple[str, date, date]] = []
+    for year in range(2003, _CES_SCRAPE_START_YEAR):
+        for month in range(1, 13):
+            ref = date(year, month, 12)
+            pub = _ces_publication_date(year, month)
+            rows.append(('ces', ref, pub))
+    return rows
 
 
 def _add_ces_revisions(df: pl.DataFrame) -> pl.DataFrame:
@@ -248,11 +299,12 @@ def build_vintage_dates(release_dates_path: Path | None = None) -> pl.DataFrame:
     path = release_dates_path or RELEASE_DATES_PATH
     df = pl.read_parquet(path)
 
-    # Merge supplemental release dates for early-2010 gaps
+    # Merge supplemental + pre-scrape release dates for gaps
+    all_supplemental = SUPPLEMENTAL_RELEASE_DATES + _generate_ces_pre_scrape_dates()
     supplemental = pl.DataFrame(
         [
             {'publication': p, 'ref_date': ref, 'vintage_date': vint}
-            for p, ref, vint in SUPPLEMENTAL_RELEASE_DATES
+            for p, ref, vint in all_supplemental
         ],
         schema={'publication': pl.Utf8, 'ref_date': pl.Date, 'vintage_date': pl.Date},
     )
