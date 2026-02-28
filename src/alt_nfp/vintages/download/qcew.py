@@ -31,9 +31,14 @@ BULK_OUTPUT_FILENAME = 'qcew_bulk.parquet'
 _STATE_AREA_FIPS: frozenset[str] = frozenset(f'{s}000' for s in STATES)
 _WANTED_AREAS: frozenset[str] = _STATE_AREA_FIPS | {'US000'}
 
-# Aggregation levels: national total (10), national by NAICS sector (14),
-# state total (50), state by NAICS sector (54).
-_WANTED_AGGLVL: frozenset[str] = frozenset({'10', '14', '50', '54'})
+# Aggregation levels kept from bulk singlefiles:
+#   10/50 = national/state total
+#   11/51 = national/state by ownership (government extraction)
+#   14/54 = national/state by NAICS 2-digit sector
+#   15/55 = national/state by NAICS 3-digit subsector (mfg durable/nondurable)
+_WANTED_AGGLVL: frozenset[str] = frozenset(
+    {'10', '11', '14', '15', '50', '51', '54', '55'}
+)
 
 _KEEP_COLUMNS: list[str] = [
     'area_fips', 'own_code', 'industry_code', 'agglvl_code',
@@ -80,8 +85,9 @@ def _filter_bulk_csv(csv_bytes: bytes) -> pl.DataFrame:
 
     Keeps rows matching:
     - ``area_fips`` in national + state FIPS set
-    - ``agglvl_code`` in {10, 14, 50, 54}
-    - ``own_code`` in {'0', '5'} (total and private)
+    - ``agglvl_code`` in :data:`_WANTED_AGGLVL`
+    - ``own_code`` in ``{'0', '1', '2', '3', '5'}``
+      (total, federal, state, local government, private)
     """
     df = pl.read_csv(
         io.BytesIO(csv_bytes),
@@ -91,7 +97,7 @@ def _filter_bulk_csv(csv_bytes: bytes) -> pl.DataFrame:
     df = df.filter(
         pl.col('area_fips').is_in(_WANTED_AREAS)
         & pl.col('agglvl_code').is_in(_WANTED_AGGLVL)
-        & pl.col('own_code').is_in({'0', '5'})
+        & pl.col('own_code').is_in({'0', '1', '2', '3', '5'})
     )
     present = [c for c in _KEEP_COLUMNS if c in df.columns]
     return df.select(present)

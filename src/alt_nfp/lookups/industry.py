@@ -314,6 +314,27 @@ GOVT_OWNERSHIP_TO_SECTOR: dict[str, str] = {
     '3': '93',  # Local
 }
 
+# NAICS 3-digit manufacturing subsectors → CES durable/nondurable sector code.
+# CES sector 31 = Durable goods, sector 32 = Nondurable goods.
+# Used to split QCEW total manufacturing into the CES durable/nondurable grouping.
+NAICS3_TO_MFG_SECTOR: dict[str, str] = {
+    # Nondurable goods (CES sector 32)
+    '311': '32', '312': '32', '313': '32', '314': '32', '315': '32',
+    '316': '32', '322': '32', '323': '32', '324': '32', '325': '32', '326': '32',
+    # Durable goods (CES sector 31)
+    '321': '31', '327': '31', '331': '31', '332': '31', '333': '31',
+    '334': '31', '335': '31', '336': '31', '337': '31', '339': '31',
+}
+
+# Supersectors that contain exactly one NAICS sector.  These supersector rows
+# can be duplicated as sector rows by remapping the industry_code.
+# Used by QCEW (and eventually SAE) to fill sector-level gaps.
+SINGLE_SECTOR_SUPERSECTORS: dict[str, str] = {
+    '20': '23',  # Construction
+    '50': '51',  # Information
+    '80': '81',  # Other Services
+}
+
 
 @dataclass(frozen=True)
 class IndustryEntry:

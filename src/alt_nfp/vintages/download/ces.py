@@ -1,15 +1,16 @@
 """Download CES vintage (triangular revision) data from BLS.
 
-Scrapes the CES vintage-data page for ``cesvinall.zip`` and individual
-``cesvin*.xlsx`` workbooks. The zip is extracted into
-``DATA_DIR / 'downloads' / 'ces' / 'cesvinall'``.
+Scrapes the CES vintage-data page for the ``cesvinall.zip`` bundle and
+extracts it into ``DATA_DIR / 'downloads' / 'ces' / 'cesvinall'``.
+Only the zip is needed; the individual xlsx workbooks on the same page
+contain the same data and are not used downstream.
 """
 
 from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -21,33 +22,14 @@ CES_INDEX_URL = 'https://www.bls.gov/web/empsit/cesvindata.htm'
 CES_BASE_URL = 'https://www.bls.gov/web/empsit/'
 
 
-def _resolve_url(href: str, base: str = CES_BASE_URL) -> str:
-    """Join *href* against *base* to produce an absolute URL."""
-    return urljoin(base, href)
-
-
-def _discover_links(html: str) -> list[str]:
-    """Collect ``cesvinall.zip`` and ``cesvin*.xlsx`` URLs from the CES page."""
+def _find_zip_url(html: str) -> str:
+    """Locate the ``cesvinall.zip`` link on the CES vintage-data page."""
     soup = BeautifulSoup(html, 'html.parser')
-    out: list[str] = []
-    seen: set[str] = set()
     for a in soup.find_all('a', href=True):
         href = a['href'].strip()
-        if not href or href.startswith('#') or href.startswith('mailto:'):
-            continue
-        url = _resolve_url(href)
-        if url in seen:
-            continue
-        low = href.lower()
-        if 'cesvinall.zip' in low:
-            seen.add(url)
-            out.append(url)
-        elif ('cesvin' in low or 'cesvin_template' in low) and (
-            low.endswith('.xlsx') or low.endswith('.zip')
-        ):
-            seen.add(url)
-            out.append(url)
-    return out
+        if 'cesvinall.zip' in href.lower():
+            return urljoin(CES_BASE_URL, href)
+    raise RuntimeError('cesvinall.zip link not found on CES index page')
 
 
 def download_ces(
@@ -55,10 +37,9 @@ def download_ces(
     *,
     client: httpx.Client | None = None,
 ) -> None:
-    """Scrape the CES vintage-data page and download all linked files.
+    """Download and extract ``cesvinall.zip`` from the BLS CES vintage page.
 
-    Downloads ``cesvinall.zip`` (extracted into ``{data_dir}/downloads/ces/cesvinall/``)
-    and individual ``cesvin*.xlsx`` workbooks into ``{data_dir}/downloads/ces/``.
+    The zip is extracted into ``{data_dir}/downloads/ces/cesvinall/``.
 
     Parameters
     ----------
@@ -67,8 +48,7 @@ def download_ces(
     client : httpx.Client or None
         Optional pre-built client. A new one is created if not provided.
     """
-    base = (data_dir or DATA_DIR) / 'downloads'
-    ces_dir = base / 'ces'
+    ces_dir = (data_dir or DATA_DIR) / 'downloads' / 'ces'
     ces_dir.mkdir(parents=True, exist_ok=True)
 
     own_client = client is None
@@ -78,31 +58,19 @@ def download_ces(
     try:
         r = get_with_retry(client, CES_INDEX_URL)
         r.raise_for_status()
-        links = _discover_links(r.text)
-        if not links:
-            raise RuntimeError('No CES data links found on index page')
+        zip_url = _find_zip_url(r.text)
 
-        for url in links:
-            parsed = urlparse(url)
-            name = Path(parsed.path).name
-            if not name:
-                continue
-            r = get_with_retry(client, url)
-            r.raise_for_status()
+        r = get_with_retry(client, zip_url)
+        r.raise_for_status()
 
-            if name.lower().endswith('.zip'):
-                extract_to = ces_dir / 'cesvinall'
-                extract_to.mkdir(parents=True, exist_ok=True)
-                zip_path = ces_dir / name
-                zip_path.write_bytes(r.content)
-                with zipfile.ZipFile(zip_path, 'r') as zf:
-                    zf.extractall(extract_to)
-                zip_path.unlink()
-                print(f'  extracted {name} -> {extract_to}/')
-            else:
-                out_path = ces_dir / name
-                out_path.write_bytes(r.content)
-                print(f'  saved {name}')
+        extract_to = ces_dir / 'cesvinall'
+        extract_to.mkdir(parents=True, exist_ok=True)
+        zip_path = ces_dir / 'cesvinall.zip'
+        zip_path.write_bytes(r.content)
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(extract_to)
+        zip_path.unlink()
+        print(f'  extracted cesvinall.zip -> {extract_to}/')
     finally:
         if own_client:
             client.close()

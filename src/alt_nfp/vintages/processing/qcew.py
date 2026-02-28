@@ -2,11 +2,21 @@
 
 Two data sources are merged:
 
-1. **Bulk quarterly files** (2003-present): sector-level private employment
-   (``own_code='5'``) and total all-ownership employment (``own_code='0'``),
-   processed from :func:`~alt_nfp.vintages.download.qcew.download_qcew_bulk`.
-   Sector data is aggregated through the industry hierarchy (sectors ->
-   supersectors -> domains).  All rows are stored as ``revision=0``.
+1. **Bulk quarterly files** (2003-present): employment from multiple ownership
+   and aggregation-level streams, processed from
+   :func:`~alt_nfp.vintages.download.qcew.download_qcew_bulk`.
+
+   Streams:
+   - Total all-ownership (``own_code='0'``) → ``(national, '00')``
+   - Private 2-digit sectors (``own_code='5'``, ``agglvl`` 14/54)
+   - Government by ownership (``own_code`` 1/2/3, ``agglvl`` 11/51) →
+     sectors 91/92/93
+   - Manufacturing 3-digit NAICS (``own_code='5'``, ``agglvl`` 15/55) →
+     durable (31) / nondurable (32) split
+
+   Sector data is aggregated through the industry hierarchy (sectors →
+   supersectors → domains).  Single-sector supersectors (20, 50, 80) are
+   duplicated as sector rows (23, 51, 81).  All rows are ``revision=0``.
 
 2. **Revisions CSV** (2017-present): total employment with revision history
    (``revision`` 0-4), from :func:`~alt_nfp.vintages.download.qcew.download_qcew`.
@@ -23,7 +33,8 @@ import polars as pl
 from alt_nfp.config import DOWNLOADS_DIR, INTERMEDIATE_DIR
 from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
 from alt_nfp.lookups.industry import (
-    _HIERARCHY_ROWS,
+    GOVT_OWNERSHIP_TO_SECTOR,
+    NAICS3_TO_MFG_SECTOR,
     get_domain_supersectors,
     get_supersector_components,
     qcew_to_sector,
@@ -43,28 +54,28 @@ OUTPUT_COLUMNS = [
     'employment',
 ]
 
-# NAICS codes that appear in the bulk files for 2-digit sectors.
-# Includes range-notation variants that BLS uses.
+# NAICS 2-digit codes that appear in the bulk files for private sectors.
+# Manufacturing codes ('1022', '31-33', '31') are excluded — those are
+# handled via the 3-digit durable/nondurable split instead.
 _NAICS_TO_SECTOR: dict[str, str] = {
-    **qcew_to_sector(),
-    '31-33': '31',
-    '44-45': '44',
-    '48-49': '48',
+    k: v
+    for k, v in {**qcew_to_sector(), '44-45': '44', '48-49': '48'}.items()
+    if v != '31'
 }
 
-# Supersector -> list of component sector codes
-_SS_COMPONENTS: dict[str, list[str]] = get_supersector_components()
-
-# Sector -> supersector lookup
-_SECTOR_TO_SS: dict[str, str] = {
-    row[0]: row[2] for row in _HIERARCHY_ROWS
-}
+# Sector → supersector lookup built from get_supersector_components() so it
+# includes government (91→90, 92→90, 93→90) and nondurable mfg (32→30).
+_SECTOR_TO_SS: dict[str, str] = {}
+for _ss, _sectors in get_supersector_components().items():
+    for _sec in _sectors:
+        _SECTOR_TO_SS[_sec] = _ss
+_SECTOR_TO_SS['32'] = '30'
 
 # Domain definitions: supersector codes composing each domain.
-# We aggregate from private supersectors only (no '90' / government here).
 _DOMAIN_SPECS: dict[str, list[str]] = {
     '05': get_domain_supersectors('05'),
     '06': get_domain_supersectors('06'),
+    '07': get_domain_supersectors('07'),
     '08': get_domain_supersectors('08'),
 }
 
@@ -105,7 +116,21 @@ def _compute_vintage_date(ref_date: date) -> date:
 
 
 def _process_bulk() -> pl.DataFrame:
-    """Read ``qcew_bulk.parquet`` and produce sector + aggregated rows."""
+    """Read ``qcew_bulk.parquet`` and produce sector + aggregated rows.
+
+    Four input streams are extracted from the bulk data:
+
+    1. **Total** (``own_code='0'``) → ``(national, '00')``
+    2. **Private 2-digit sectors** (``own_code='5'``, ``agglvl`` 14/54) —
+       all sectors except manufacturing (handled separately)
+    3. **Government by ownership** (``own_code`` 1/2/3, ``agglvl`` 11/51) →
+       sectors 91/92/93
+    4. **Manufacturing 3-digit** (``own_code='5'``, ``agglvl`` 15/55) →
+       durable (31) / nondurable (32)
+
+    Sectors are then aggregated → supersectors → domains.  Single-sector
+    supersectors (20, 50, 80) are duplicated as sector rows (23, 51, 81).
+    """
     if not BULK_PATH.exists():
         print(f'  bulk file not found: {BULK_PATH}')
         return pl.DataFrame(schema={c: pl.Utf8 for c in OUTPUT_COLUMNS})
@@ -143,57 +168,105 @@ def _process_bulk() -> pl.DataFrame:
         .otherwise(pl.col('area_fips').str.slice(0, 2)),
     )
 
-    # --- Split into total (own_code=0) and sector (own_code=5) streams ---
-    total_rows = monthly.filter(pl.col('own_code') == '0').with_columns(
+    geo_group = ['geographic_type', 'geographic_code', 'ref_date']
+    sector_group = [*geo_group, 'industry_type', 'industry_code']
+
+    # === Stream 1: total (own_code=0) ===
+    total_rows = monthly.filter(
+        (pl.col('own_code') == '0')
+        & pl.col('agglvl_code').is_in({'10', '50'})
+    ).with_columns(
         industry_type=pl.lit('national'),
         industry_code=pl.lit('00'),
     )
 
-    sector_raw = monthly.filter(pl.col('own_code') == '5')
-
-    # Map NAICS industry_code to simplified sector code
+    # === Stream 2: private 2-digit sectors (excl manufacturing) ===
+    private_raw = monthly.filter(
+        (pl.col('own_code') == '5')
+        & pl.col('agglvl_code').is_in({'14', '54'})
+    )
     naics_map = pl.DataFrame({
         'industry_code': list(_NAICS_TO_SECTOR.keys()),
         'sector_code': list(_NAICS_TO_SECTOR.values()),
     })
-    sector_rows = (
-        sector_raw.join(naics_map, on='industry_code', how='inner')
+    private_sectors = (
+        private_raw.join(naics_map, on='industry_code', how='inner')
         .drop('industry_code')
         .rename({'sector_code': 'industry_code'})
         .with_columns(industry_type=pl.lit('sector'))
-    )
-
-    # Aggregate duplicate rows (some NAICS codes map to the same sector)
-    sector_agg = (
-        sector_rows.group_by(
-            ['geographic_type', 'geographic_code', 'industry_code',
-             'industry_type', 'ref_date']
-        )
+        .group_by(sector_group)
         .agg(employment=pl.col('employment').sum())
     )
 
-    # --- Aggregate sectors -> supersectors ---
+    # === Stream 3: government by ownership (own_code 1/2/3) ===
+    govt_raw = monthly.filter(
+        pl.col('own_code').is_in({'1', '2', '3'})
+        & pl.col('agglvl_code').is_in({'11', '51'})
+        & (pl.col('industry_code') == '10')
+    )
+    govt_map = pl.DataFrame({
+        'own_code': list(GOVT_OWNERSHIP_TO_SECTOR.keys()),
+        'sector_code': list(GOVT_OWNERSHIP_TO_SECTOR.values()),
+    })
+    govt_sectors = (
+        govt_raw.join(govt_map, on='own_code', how='inner')
+        .with_columns(
+            industry_type=pl.lit('sector'),
+            industry_code=pl.col('sector_code'),
+        )
+        .group_by(sector_group)
+        .agg(employment=pl.col('employment').sum())
+    )
+
+    # === Stream 4: manufacturing 3-digit → durable (31) / nondurable (32) ===
+    mfg_raw = monthly.filter(
+        (pl.col('own_code') == '5')
+        & pl.col('agglvl_code').is_in({'15', '55'})
+    )
+    mfg_map = pl.DataFrame({
+        'industry_code': list(NAICS3_TO_MFG_SECTOR.keys()),
+        'sector_code': list(NAICS3_TO_MFG_SECTOR.values()),
+    })
+    mfg_sectors = (
+        mfg_raw.join(mfg_map, on='industry_code', how='inner')
+        .drop('industry_code')
+        .rename({'sector_code': 'industry_code'})
+        .with_columns(industry_type=pl.lit('sector'))
+        .group_by(sector_group)
+        .agg(employment=pl.col('employment').sum())
+    )
+
+    # === Combine all sector rows ===
+    keep_cols = [
+        'geographic_type', 'geographic_code', 'industry_type',
+        'industry_code', 'ref_date', 'employment',
+    ]
+    all_sectors = pl.concat([
+        private_sectors.select(keep_cols),
+        govt_sectors.select(keep_cols),
+        mfg_sectors.select(keep_cols),
+    ])
+
+    # === Aggregate sectors → supersectors ===
     ss_map = pl.DataFrame({
         'industry_code': list(_SECTOR_TO_SS.keys()),
         'supersector_code': list(_SECTOR_TO_SS.values()),
     })
     supersector_rows = (
-        sector_agg.join(ss_map, on='industry_code', how='inner')
-        .group_by(
-            ['geographic_type', 'geographic_code', 'supersector_code', 'ref_date']
-        )
+        all_sectors.join(ss_map, on='industry_code', how='inner')
+        .group_by([*geo_group, 'supersector_code'])
         .agg(employment=pl.col('employment').sum())
         .rename({'supersector_code': 'industry_code'})
         .with_columns(industry_type=pl.lit('supersector'))
     )
 
-    # --- Aggregate supersectors -> domains ---
+    # === Aggregate supersectors → domains ===
     domain_frames: list[pl.DataFrame] = []
     for domain_code, ss_list in _DOMAIN_SPECS.items():
         domain_df = (
             supersector_rows
             .filter(pl.col('industry_code').is_in(ss_list))
-            .group_by(['geographic_type', 'geographic_code', 'ref_date'])
+            .group_by(geo_group)
             .agg(employment=pl.col('employment').sum())
             .with_columns(
                 industry_code=pl.lit(domain_code),
@@ -202,17 +275,17 @@ def _process_bulk() -> pl.DataFrame:
         )
         domain_frames.append(domain_df)
 
-    # --- Combine all levels ---
-    keep_cols = [
-        'geographic_type', 'geographic_code', 'industry_type',
-        'industry_code', 'ref_date', 'employment',
-    ]
-    total_select = total_rows.select(keep_cols)
-    sector_select = sector_agg.select(keep_cols)
-    ss_select = supersector_rows.select(keep_cols)
-    domain_select = pl.concat(domain_frames).select(keep_cols)
-
-    combined = pl.concat([total_select, sector_select, ss_select, domain_select])
+    # === Combine all hierarchy levels ===
+    # Sectors 23, 51, 81 come from the private NAICS mapping (they are the
+    # sole sector in their respective supersectors 20, 50, 80 — see
+    # SINGLE_SECTOR_SUPERSECTORS).  No separate duplication step needed here
+    # because the raw NAICS data naturally provides them.
+    combined = pl.concat([
+        total_rows.select(keep_cols),
+        all_sectors.select(keep_cols),
+        supersector_rows.select(keep_cols),
+        pl.concat(domain_frames).select(keep_cols),
+    ])
 
     # --- Add vintage metadata ---
     vintage_dates = combined.select('ref_date').unique().to_series().to_list()
@@ -234,7 +307,10 @@ def _process_bulk() -> pl.DataFrame:
         .select(OUTPUT_COLUMNS)
     )
 
-    print(f'  bulk: {combined.height:,} rows across {combined["industry_code"].n_unique()} industries')
+    print(
+        f'  bulk: {combined.height:,} rows across '
+        f'{combined["industry_code"].n_unique()} industries'
+    )
     return combined
 
 

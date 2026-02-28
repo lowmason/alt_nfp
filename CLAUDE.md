@@ -81,6 +81,8 @@ alt_nfp/
 │   ├── sensitivity.py        # QCEW sigma sensitivity analysis
 │   ├── lookups/              # Static reference tables
 │   │   ├── industry.py       # NAICS → supersector → domain hierarchy + CES series ID map
+│   │   │                     #   + NAICS3_TO_MFG_SECTOR, SINGLE_SECTOR_SUPERSECTORS,
+│   │   │                     #   GOVT_OWNERSHIP_TO_SECTOR
 │   │   ├── revision_schedules.py  # QCEW & CES vintage schedules + publication calendar
 │   │   ├── benchmark_revisions.py # Historical actual BLS benchmark revisions
 │   │   └── geography.py      # State/area geography hierarchy
@@ -115,7 +117,7 @@ alt_nfp/
 │       ├── views.py          # real_time_view, final_view
 │       ├── evaluation.py     # vintage_diff, noise multiplier builder
 │       ├── download/         # Vintage data downloaders
-│       │   ├── ces.py        # CES vintage downloads
+│       │   ├── ces.py        # CES cesvinall.zip download + extraction
 │       │   └── qcew.py       # QCEW vintage downloads
 │       └── processing/       # Vintage data processing
 │           ├── ces_national.py   # CES national vintage processing
@@ -197,7 +199,9 @@ alt_nfp/
 - **FRED API client** (`ingest/fred.py`): `fetch_fred_series(series_id)` downloads a single FRED time series via the JSON API (`api.stlouisfed.org`). Uses `httpx` with exponential-backoff retry. Requires `FRED_API_KEY` env var.
 - **Indicator store** (`ingest/indicators.py`): `download_indicators()` fetches all `CYCLICAL_INDICATORS` from FRED and writes to `data/indicators/`. `read_indicator(name)` loads a single parquet. CLI: `alt-nfp download-indicators`.
 - **BLS API client** (`ingest/bls/`): structured HTTP layer for downloading CES and QCEW data directly from BLS. `_programs.py` defines program metadata; `_http.py` handles request transport.
-- **Vintage pipeline** (`vintages/`): download → process → current → build workflow for managing real-time data vintages. CLI: `alt-nfp` (or `python -m alt_nfp.vintages`). Steps: `download` fetches raw CES triangular + QCEW bulk files; `process` scrapes the BLS release calendar (internally) then parses revisions into `revisions.parquet`; `current` fetches the latest BLS estimates (benchmark-revised) into `releases.parquet`; `build` merges both into `data/store/`, a Hive-partitioned parquet dataset partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
+- **Vintage pipeline** (`vintages/`): download → process → current → build workflow for managing real-time data vintages. CLI: `alt-nfp` (or `python -m alt_nfp.vintages`). Steps: `download` fetches `cesvinall.zip` (CES triangular revision CSVs) + QCEW bulk files; `process` scrapes the BLS release calendar (internally) then parses revisions into `revisions.parquet`; `current` fetches the latest BLS estimates (benchmark-revised) into `releases.parquet`; `build` merges both into `data/store/`, a Hive-partitioned parquet dataset partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
+- **QCEW bulk download** (`vintages/download/qcew.py`): downloads yearly singlefile ZIPs from BLS, filters to `own_code ∈ {0,1,2,3,5}` (total, federal/state/local government, private) and `agglvl_code ∈ {10,11,14,15,50,51,54,55}` (national/state totals, by ownership, by 2-digit NAICS sector, by 3-digit NAICS subsector). Saves as `qcew_bulk.parquet`.
+- **QCEW processing** (`vintages/processing/qcew.py`): four input streams from bulk data: (1) total all-ownership → `(national, '00')`; (2) private 2-digit NAICS sectors (excluding manufacturing); (3) government by ownership (`own_code` 1/2/3 → sectors 91/92/93 via `GOVT_OWNERSHIP_TO_SECTOR`); (4) manufacturing 3-digit NAICS subsectors → durable (sector 31) / nondurable (sector 32) via `NAICS3_TO_MFG_SECTOR`. Sectors aggregate → supersectors (including 90=Government) → domains (05, 06, 07, 08). Single-sector supersectors (20/50/80) naturally produce sector rows (23/51/81) from the NAICS mapping. QCEW national has 38 industry combos; CES national has 35 (difference: CES uses its own sector codes 41/42/43 for Wholesale/Retail/Transport vs NAICS 42/44/48, and QCEW has 3 extra NAICS sectors 23/51/81).
 - **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to assign `vintage_date` to each CES/QCEW revision. Built automatically by the `process` step; intermediate outputs are `release_dates.parquet` and `vintage_dates.parquet`.
 - **Benchmark revision inference** (`benchmark.py`): extracts March-level employment changes from the posterior, compares to actual BLS benchmark revisions (`lookups/benchmark_revisions.py`), decomposes into continuing-units divergence + BD accumulation.
 - **Nowcast backtest** (`backtest.py`): real-time vintage-aware backtest over the last *n* months. For each target month T, sets `as_of=T` so only data published by that date is available — CES gets the revision that existed at each point (T-1 = rev 0, T-2 = rev 1, T-3 = rev 2), QCEW is naturally missing for the most recent ~5-6 months, cyclical indicators are censored by their publication lags. Compares the model's nowcast to the final CES release. Reports per-month errors (growth pp, jobs-added k) and the vintage frontier (latest CES/QCEW period available). Requires the vintage store (`data/store/`) to have triangular revision history; warns when the CES frontier is stale.
