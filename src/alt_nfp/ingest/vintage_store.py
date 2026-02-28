@@ -220,12 +220,18 @@ def transform_to_panel(
 
     # --- 5. is_final ------------------------------------------------------
     # CES/SAE: final once benchmarked.
-    # QCEW: final at the maximum revision for the reference quarter.
+    # QCEW pre-2017: only revision-0 data exists; treat as final.
+    # QCEW 2017+: final at the maximum revision for the reference quarter.
     qtr_expr = (pl.col("ref_date").dt.month() - 1) // 3 + 1
 
     lf = lf.with_columns(
         pl.when(pl.col("source").is_in(["ces", "sae"]))
         .then(pl.col("revision_number") == -1)
+        .when(
+            (pl.col("source") == "qcew")
+            & (pl.col("ref_date") < pl.date(2017, 1, 1))
+        )
+        .then(pl.lit(True))
         .when((pl.col("source") == "qcew") & (qtr_expr == 1))
         .then(pl.col("revision").cast(pl.Int32) == 4)
         .when((pl.col("source") == "qcew") & (qtr_expr == 2))
@@ -245,6 +251,7 @@ def transform_to_panel(
     dedup_key = [
         "ref_date",
         "source_tag",
+        "industry_type",
         "industry_code",
         "geographic_type",
         "geographic_code",

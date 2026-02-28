@@ -47,11 +47,15 @@ def build_store(
     revisions = pl.read_parquet(rev_path).with_columns(
         current=pl.lit(0, pl.UInt8),
     )
-    releases = pl.read_parquet(rel_path).with_columns(
-        current=pl.lit(1, pl.UInt8),
-    )
 
-    combined = pl.concat([revisions, releases], how='diagonal_relaxed')
+    if rel_path.exists():
+        releases = pl.read_parquet(rel_path).with_columns(
+            current=pl.lit(1, pl.UInt8),
+        )
+        combined = pl.concat([revisions, releases], how='diagonal_relaxed')
+    else:
+        print(f'  Note: {rel_path} not found — building store from revisions only')
+        combined = revisions
 
     # Normalize industry_type: set to 'national' where industry_code == '00'
     combined = combined.with_columns(

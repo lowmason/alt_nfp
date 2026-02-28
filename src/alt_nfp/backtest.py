@@ -19,9 +19,10 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .config import OUTPUT_DIR
-from .data import load_data
+from .config import OUTPUT_DIR, PROVIDERS
+from .ingest import build_panel
 from .model import build_model
+from .panel_adapter import panel_to_model_data
 from .sampling import LIGHT_SAMPLER_KWARGS, sample_model
 
 
@@ -40,16 +41,14 @@ def run_backtest(n_backtest: int = 24) -> list[dict]:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Full data (no censoring) for actuals
-    data_full = load_data()
+    panel = build_panel()
+    data_full = panel_to_model_data(panel, PROVIDERS)
+
     dates = data_full["dates"]
     T = len(dates)
     g_ces_sa_actual = data_full["g_ces_sa"]
     levels = data_full["levels"]
     ces_sa_index = levels["ces_sa_index"].to_numpy().astype(float)
-    ces_sa_level = levels["ces_sa_level"].to_numpy().astype(float)
-    base_row_idx = int(np.argmin(np.abs(ces_sa_index - 100.0)))
-    ces_sa_base_level = float(ces_sa_level[base_row_idx])
     base_index = float(ces_sa_index[0])
 
     if T < n_backtest:
@@ -63,7 +62,7 @@ def run_backtest(n_backtest: int = 24) -> list[dict]:
     for run, (t_idx, target_date) in enumerate(zip(target_indices, target_dates)):
         print(f"\n--- Nowcast backtest {run + 1}/{n_backtest}: {target_date} ---")
 
-        data = load_data(censor_ces_from=target_date)
+        data = panel_to_model_data(panel, PROVIDERS, censor_ces_from=target_date)
         model = build_model(data)
         idata = sample_model(model, sampler_kwargs=LIGHT_SAMPLER_KWARGS)
 
@@ -72,26 +71,21 @@ def run_backtest(n_backtest: int = 24) -> list[dict]:
         cum_sa = np.cumsum(g_sa_mean)
         nowcast_growth = g_sa_mean[t_idx]
         nowcast_index = base_index * np.exp(cum_sa[t_idx])
-        nowcast_level = nowcast_index * (ces_sa_base_level / 100.0)
 
         actual_growth = g_ces_sa_actual[t_idx]
-        actual_index = ces_sa_index[t_idx + 1]
-        actual_level = ces_sa_level[t_idx + 1]
+        actual_index = ces_sa_index[t_idx + 1] if t_idx + 1 < len(ces_sa_index) else np.nan
 
-        actual_change_k = (actual_level - ces_sa_level[t_idx]) / 1000.0
+        actual_change_k = (actual_index - ces_sa_index[t_idx]) / 1000.0
         if t_idx > 0:
-            prev_level = (
-                base_index * np.exp(cum_sa[t_idx - 1]) * (ces_sa_base_level / 100.0)
-            )
+            prev_index = base_index * np.exp(cum_sa[t_idx - 1])
         else:
-            prev_level = ces_sa_level[0]
-        nowcast_change_k = (nowcast_level - prev_level) / 1000.0
+            prev_index = ces_sa_index[0]
+        nowcast_change_k = (nowcast_index - prev_index) / 1000.0
         error_change_k = actual_change_k - nowcast_change_k
 
         err_growth_pp = (nowcast_growth - actual_growth) * 100
-        err_level_k = (actual_level - nowcast_level) / 1000.0
+        err_level_k = (actual_index - nowcast_index) / 1000.0
 
-        # Which alt-data sources are available at the target month?
         sources: list[str] = []
         if t_idx in data["qcew_obs"]:
             sources.append("QCEW")
@@ -109,8 +103,8 @@ def run_backtest(n_backtest: int = 24) -> list[dict]:
                 "actual_change_k": actual_change_k,
                 "nowcast_change_k": nowcast_change_k,
                 "error_change_k": error_change_k,
-                "actual_level_k": actual_level / 1000.0,
-                "nowcast_level_k": nowcast_level / 1000.0,
+                "actual_level_k": actual_index / 1000.0,
+                "nowcast_level_k": nowcast_index / 1000.0,
                 "error_level_k": err_level_k,
                 "sources": sources_str,
             }
@@ -157,7 +151,6 @@ def _print_results_table(results: list[dict], n_backtest: int) -> None:
             f'{r["sources"]:>12}'
         )
 
-    # Split by data availability
     data_rich = [
         r for r in results if "QCEW" in r["sources"] or "PP1" in r["sources"]
     ]

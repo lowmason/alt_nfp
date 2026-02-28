@@ -1,22 +1,74 @@
-"""Process the QCEW revisions CSV into ``qcew_revisions.parquet``.
+"""Process QCEW data into ``qcew_revisions.parquet``.
 
-Reads the raw CSV (downloaded by :mod:`~alt_nfp.vintages.download.qcew`),
-filters to employment rows, maps area names to FIPS codes, unpivots the
-revision columns into long format, joins vintage dates, and writes the result.
+Two data sources are merged:
+
+1. **Bulk quarterly files** (2003-present): sector-level private employment
+   (``own_code='5'``) and total all-ownership employment (``own_code='0'``),
+   processed from :func:`~alt_nfp.vintages.download.qcew.download_qcew_bulk`.
+   Sector data is aggregated through the industry hierarchy (sectors ->
+   supersectors -> domains).  All rows are stored as ``revision=0``.
+
+2. **Revisions CSV** (2017-present): total employment with revision history
+   (``revision`` 0-4), from :func:`~alt_nfp.vintages.download.qcew.download_qcew`.
+   Where both sources overlap on ``(geographic_code, industry_code, ref_date,
+   revision)``, the revisions CSV is preferred (it has exact vintage dates).
 """
 
 from __future__ import annotations
+
+from datetime import date
 
 import polars as pl
 
 from alt_nfp.config import DATA_DIR
 from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
+from alt_nfp.lookups.industry import (
+    _HIERARCHY_ROWS,
+    get_domain_supersectors,
+    get_supersector_components,
+    qcew_to_sector,
+)
+from alt_nfp.lookups.revision_schedules import get_qcew_vintage_date
 
 OUTPUT_PATH = DATA_DIR / 'raw' / 'qcew_revisions.parquet'
 QCEW_CSV_PATH = DATA_DIR / 'raw' / 'qcew' / 'qcew-revisions.csv'
+BULK_PATH = DATA_DIR / 'raw' / 'qcew' / 'qcew_bulk.parquet'
 
-# State name -> FIPS mapping. Built from the geography lookup plus
-# the US national entry. Puerto Rico (FIPS '72') is in STATES.
+OUTPUT_COLUMNS = [
+    'source', 'seasonally_adjusted',
+    'geographic_type', 'geographic_code',
+    'industry_type', 'industry_code',
+    'ref_date', 'vintage_date',
+    'revision', 'benchmark_revision',
+    'employment',
+]
+
+# NAICS codes that appear in the bulk files for 2-digit sectors.
+# Includes range-notation variants that BLS uses.
+_NAICS_TO_SECTOR: dict[str, str] = {
+    **qcew_to_sector(),
+    '31-33': '31',
+    '44-45': '44',
+    '48-49': '48',
+}
+
+# Supersector -> list of component sector codes
+_SS_COMPONENTS: dict[str, list[str]] = get_supersector_components()
+
+# Sector -> supersector lookup
+_SECTOR_TO_SS: dict[str, str] = {
+    row[0]: row[2] for row in _HIERARCHY_ROWS
+}
+
+# Domain definitions: supersector codes composing each domain.
+# We aggregate from private supersectors only (no '90' / government here).
+_DOMAIN_SPECS: dict[str, list[str]] = {
+    '05': get_domain_supersectors('05'),
+    '06': get_domain_supersectors('06'),
+    '08': get_domain_supersectors('08'),
+}
+
+# State name -> FIPS mapping for the revisions CSV.
 _STATE_FIPS_TO_NAME: dict[str, str] = {
     '01': 'Alabama', '02': 'Alaska', '04': 'Arizona', '05': 'Arkansas',
     '06': 'California', '08': 'Colorado', '09': 'Connecticut',
@@ -35,15 +87,168 @@ _STATE_FIPS_TO_NAME: dict[str, str] = {
     '51': 'Virginia', '53': 'Washington', '54': 'West Virginia',
     '55': 'Wisconsin', '56': 'Wyoming', '72': 'Puerto Rico',
 }
-
 STATES_NAME_TO_FIPS: dict[str, str] = {
     'United States': '00',
     **{name: fips for fips, name in _STATE_FIPS_TO_NAME.items()},
 }
 
 
-def main() -> None:
-    """Read the QCEW revisions CSV, reshape, join vintage dates, and write Parquet."""
+# ---------------------------------------------------------------------------
+# Bulk data processing
+# ---------------------------------------------------------------------------
+
+
+def _compute_vintage_date(ref_date: date) -> date:
+    """Approximate vintage_date for an initial (revision=0) QCEW observation."""
+    qtr = (ref_date.month - 1) // 3 + 1
+    return get_qcew_vintage_date(f'Q{qtr}', ref_date.year, revision=0)
+
+
+def _process_bulk() -> pl.DataFrame:
+    """Read ``qcew_bulk.parquet`` and produce sector + aggregated rows."""
+    if not BULK_PATH.exists():
+        print(f'  bulk file not found: {BULK_PATH}')
+        return pl.DataFrame(schema={c: pl.Utf8 for c in OUTPUT_COLUMNS})
+
+    df = pl.read_parquet(BULK_PATH)
+
+    # --- Unpivot monthly columns into long format ---
+    df = df.with_columns(
+        pl.col('year').cast(pl.Int32),
+        pl.col('qtr').cast(pl.Int32),
+    )
+    monthly = df.unpivot(
+        ['month1_emplvl', 'month2_emplvl', 'month3_emplvl'],
+        index=['area_fips', 'own_code', 'industry_code', 'agglvl_code', 'year', 'qtr'],
+        variable_name='month_col',
+        value_name='employment',
+    ).with_columns(
+        month_offset=pl.col('month_col').str.extract(r'month(\d)').cast(pl.Int32) - 1,
+        employment=pl.col('employment').cast(pl.Float64),
+    ).filter(
+        pl.col('employment').is_not_null() & (pl.col('employment') > 0)
+    ).with_columns(
+        month=((pl.col('qtr') - 1) * 3 + 1 + pl.col('month_offset')).cast(pl.Int32),
+    ).with_columns(
+        ref_date=pl.date(pl.col('year'), pl.col('month'), 12),
+    ).drop('month_col', 'month_offset', 'month')
+
+    # --- Map area_fips to geographic_type / geographic_code ---
+    monthly = monthly.with_columns(
+        geographic_type=pl.when(pl.col('area_fips') == 'US000')
+        .then(pl.lit('national'))
+        .otherwise(pl.lit('state')),
+        geographic_code=pl.when(pl.col('area_fips') == 'US000')
+        .then(pl.lit('00'))
+        .otherwise(pl.col('area_fips').str.slice(0, 2)),
+    )
+
+    # --- Split into total (own_code=0) and sector (own_code=5) streams ---
+    total_rows = monthly.filter(pl.col('own_code') == '0').with_columns(
+        industry_type=pl.lit('national'),
+        industry_code=pl.lit('00'),
+    )
+
+    sector_raw = monthly.filter(pl.col('own_code') == '5')
+
+    # Map NAICS industry_code to simplified sector code
+    naics_map = pl.DataFrame({
+        'industry_code': list(_NAICS_TO_SECTOR.keys()),
+        'sector_code': list(_NAICS_TO_SECTOR.values()),
+    })
+    sector_rows = (
+        sector_raw.join(naics_map, on='industry_code', how='inner')
+        .drop('industry_code')
+        .rename({'sector_code': 'industry_code'})
+        .with_columns(industry_type=pl.lit('sector'))
+    )
+
+    # Aggregate duplicate rows (some NAICS codes map to the same sector)
+    sector_agg = (
+        sector_rows.group_by(
+            ['geographic_type', 'geographic_code', 'industry_code',
+             'industry_type', 'ref_date']
+        )
+        .agg(employment=pl.col('employment').sum())
+    )
+
+    # --- Aggregate sectors -> supersectors ---
+    ss_map = pl.DataFrame({
+        'industry_code': list(_SECTOR_TO_SS.keys()),
+        'supersector_code': list(_SECTOR_TO_SS.values()),
+    })
+    supersector_rows = (
+        sector_agg.join(ss_map, on='industry_code', how='inner')
+        .group_by(
+            ['geographic_type', 'geographic_code', 'supersector_code', 'ref_date']
+        )
+        .agg(employment=pl.col('employment').sum())
+        .rename({'supersector_code': 'industry_code'})
+        .with_columns(industry_type=pl.lit('supersector'))
+    )
+
+    # --- Aggregate supersectors -> domains ---
+    domain_frames: list[pl.DataFrame] = []
+    for domain_code, ss_list in _DOMAIN_SPECS.items():
+        domain_df = (
+            supersector_rows
+            .filter(pl.col('industry_code').is_in(ss_list))
+            .group_by(['geographic_type', 'geographic_code', 'ref_date'])
+            .agg(employment=pl.col('employment').sum())
+            .with_columns(
+                industry_code=pl.lit(domain_code),
+                industry_type=pl.lit('domain'),
+            )
+        )
+        domain_frames.append(domain_df)
+
+    # --- Combine all levels ---
+    keep_cols = [
+        'geographic_type', 'geographic_code', 'industry_type',
+        'industry_code', 'ref_date', 'employment',
+    ]
+    total_select = total_rows.select(keep_cols)
+    sector_select = sector_agg.select(keep_cols)
+    ss_select = supersector_rows.select(keep_cols)
+    domain_select = pl.concat(domain_frames).select(keep_cols)
+
+    combined = pl.concat([total_select, sector_select, ss_select, domain_select])
+
+    # --- Add vintage metadata ---
+    vintage_dates = combined.select('ref_date').unique().to_series().to_list()
+    vdate_map = {d: _compute_vintage_date(d) for d in vintage_dates}
+    vdate_df = pl.DataFrame({
+        'ref_date': list(vdate_map.keys()),
+        'vintage_date': list(vdate_map.values()),
+    })
+
+    combined = (
+        combined.join(vdate_df, on='ref_date', how='left')
+        .with_columns(
+            source=pl.lit('qcew'),
+            seasonally_adjusted=pl.lit(False),
+            revision=pl.lit(0, pl.UInt8),
+            benchmark_revision=pl.lit(0, pl.UInt8),
+            employment=pl.col('employment') / 1000.0,
+        )
+        .select(OUTPUT_COLUMNS)
+    )
+
+    print(f'  bulk: {combined.height:,} rows across {combined["industry_code"].n_unique()} industries')
+    return combined
+
+
+# ---------------------------------------------------------------------------
+# Revisions CSV processing (unchanged logic from original)
+# ---------------------------------------------------------------------------
+
+
+def _process_revisions_csv() -> pl.DataFrame:
+    """Process the QCEW revisions CSV (2017+) with revision history."""
+    if not QCEW_CSV_PATH.exists():
+        print(f'  revisions CSV not found: {QCEW_CSV_PATH}')
+        return pl.DataFrame(schema={c: pl.Utf8 for c in OUTPUT_COLUMNS})
+
     qcew_1 = (
         pl.read_csv(
             QCEW_CSV_PATH,
@@ -117,36 +322,78 @@ def main() -> None:
         .sort('geographic_code', 'ref_date', 'revision')
     )
 
-    vintage_dates = (
-        pl.read_parquet(VINTAGE_DATES_PATH)
-        .filter(pl.col('publication').eq('qcew'))
-        .select(
-            qtr_date=pl.col('ref_date'),
-            revision=pl.col('revision').cast(pl.UInt8),
-            benchmark_revision=pl.col('benchmark_revision').cast(pl.UInt8),
-            vintage_date=pl.col('vintage_date'),
+    # Join vintage dates
+    if VINTAGE_DATES_PATH.exists():
+        vintage_dates = (
+            pl.read_parquet(VINTAGE_DATES_PATH)
+            .filter(pl.col('publication').eq('qcew'))
+            .select(
+                qtr_date=pl.col('ref_date'),
+                revision=pl.col('revision').cast(pl.UInt8),
+                benchmark_revision=pl.col('benchmark_revision').cast(pl.UInt8),
+                vintage_date=pl.col('vintage_date'),
+            )
         )
-    )
-
-    qcew_2 = qcew_1.join(vintage_dates, on=['qtr_date', 'revision'], how='left')
+        qcew_1 = qcew_1.join(vintage_dates, on=['qtr_date', 'revision'], how='left')
+    else:
+        qcew_1 = qcew_1.with_columns(
+            benchmark_revision=pl.lit(0, pl.UInt8),
+            vintage_date=pl.lit(None, pl.Date),
+        )
 
     output = (
-        qcew_2.with_columns(
-            source=pl.lit('qcew', pl.Utf8),
-            seasonally_adjusted=pl.lit(False, pl.Boolean),
-        ).select(
-            'source', 'seasonally_adjusted',
-            'geographic_type', 'geographic_code',
-            'industry_type', 'industry_code',
-            'ref_date', 'vintage_date',
-            'revision', 'benchmark_revision',
-            'employment',
+        qcew_1.with_columns(
+            source=pl.lit('qcew'),
+            seasonally_adjusted=pl.lit(False),
+        ).select(OUTPUT_COLUMNS)
+    )
+
+    print(f'  revisions CSV: {output.height:,} rows')
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Main: merge both sources
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Process QCEW bulk + revisions CSV data and write ``qcew_revisions.parquet``."""
+    print('=== Processing QCEW bulk data ===')
+    bulk = _process_bulk()
+
+    print('=== Processing QCEW revisions CSV ===')
+    revisions = _process_revisions_csv()
+
+    # Merge: revisions CSV wins on overlap (has exact vintage dates + revision history)
+    dedup_key = [
+        'geographic_type', 'geographic_code',
+        'industry_type', 'industry_code',
+        'ref_date', 'revision',
+    ]
+
+    if revisions.height > 0 and bulk.height > 0:
+        # Tag source priority: revisions=1 (keep), bulk=0 (fallback)
+        revisions_tagged = revisions.with_columns(_priority=pl.lit(1, pl.Int8))
+        bulk_tagged = bulk.with_columns(_priority=pl.lit(0, pl.Int8))
+        combined = (
+            pl.concat([revisions_tagged, bulk_tagged])
+            .sort('_priority', descending=True)
+            .unique(subset=dedup_key, keep='first')
+            .drop('_priority')
         )
+    elif revisions.height > 0:
+        combined = revisions
+    else:
+        combined = bulk
+
+    combined = combined.sort(
+        'geographic_code', 'industry_code', 'ref_date', 'revision',
     )
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    output.write_parquet(OUTPUT_PATH)
-    print(f'Wrote {output.height:,} rows to {OUTPUT_PATH}')
+    combined.write_parquet(OUTPUT_PATH)
+    print(f'Wrote {combined.height:,} rows to {OUTPUT_PATH}')
 
 
 if __name__ == '__main__':

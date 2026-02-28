@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from .base import PANEL_SCHEMA
+from .base import PANEL_SCHEMA, empty_panel
 from .bls import BLSHttpClient, fetch_ces_state as bls_fetch_ces_state
 
 logger = logging.getLogger(__name__)
@@ -58,10 +58,10 @@ def fetch_ces_state_current(
         )
     except Exception as e:
         logger.warning(f'Failed to fetch CES state data: {e}')
-        return _empty_panel()
+        return empty_panel()
 
     if len(raw) == 0:
-        return _empty_panel()
+        return empty_panel()
 
     today = date.today()
     rows: list[dict] = []
@@ -123,7 +123,7 @@ def fetch_ces_state_current(
                 )
 
     if not rows:
-        return _empty_panel()
+        return empty_panel()
 
     return pl.DataFrame(rows, schema=PANEL_SCHEMA)
 
@@ -174,7 +174,7 @@ def ingest_ces_state(
         logger.warning(f'Failed to fetch current CES state data: {e}')
 
     if not parts:
-        return _empty_panel()
+        return empty_panel()
 
     combined = pl.concat(parts)
 
@@ -191,8 +191,3 @@ def ingest_ces_state(
     )
 
     return combined
-
-
-def _empty_panel() -> pl.DataFrame:
-    """Return an empty DataFrame with PANEL_SCHEMA columns."""
-    return pl.DataFrame(schema=PANEL_SCHEMA)

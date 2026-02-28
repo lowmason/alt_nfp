@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
 
 from alt_nfp.checks import run_loo_cv, run_posterior_predictive_checks, run_prior_predictive_checks
 from alt_nfp.config import OUTPUT_DIR, PROVIDERS
-from alt_nfp.data import load_data
 from alt_nfp.diagnostics import plot_divergences, print_diagnostics, print_source_contributions
 from alt_nfp.forecast import forecast_and_plot
 from alt_nfp.ingest import build_panel
@@ -40,24 +39,8 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # 1. Data -------------------------------------------------------------------------------------
-    # Prefer panel from vintage store + adapter; fall back to legacy load_data() if empty/fails
-    panel = build_panel(use_legacy=False)
-    use_panel = False
-    if len(panel) > 0:
-        try:
-            data = panel_to_model_data(panel, PROVIDERS)
-            # Model expects QCEW observations; if panel has none, use legacy for a valid run
-            if len(data["qcew_obs"]) > 0:
-                use_panel = True
-            else:
-                print("Panel has no QCEW observations, using legacy load_data()")
-                data = load_data()
-        except (ValueError, KeyError) as e:
-            print(f"Panel adapter failed ({e}), using legacy load_data()")
-            data = load_data()
-    else:
-        print("Panel empty, using legacy load_data()")
-        data = load_data()
+    panel = build_panel()
+    data = panel_to_model_data(panel, PROVIDERS)
 
     # 2. Build model ------------------------------------------------------------------------------
     model = build_model(data)

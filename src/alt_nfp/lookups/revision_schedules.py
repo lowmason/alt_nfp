@@ -558,9 +558,15 @@ class PublicationCalendar:
 
 _DEFAULT_CALENDAR: PublicationCalendar | None = None
 
+_CALENDAR_PARQUET = Path(__file__).resolve().parents[3] / 'data' / 'publication_calendar.parquet'
+
 
 def get_default_calendar() -> PublicationCalendar:
-    """Return the default PublicationCalendar, built from hard-coded dates.
+    """Return the default PublicationCalendar.
+
+    Prefers ``publication_calendar.parquet`` (which merges historical
+    scraped dates back to ~2003 with forward-looking hard-coded dates).
+    Falls back to hard-coded dicts only when the parquet is absent.
 
     Lazily initialised on first call.
 
@@ -570,5 +576,8 @@ def get_default_calendar() -> PublicationCalendar:
     """
     global _DEFAULT_CALENDAR
     if _DEFAULT_CALENDAR is None:
-        _DEFAULT_CALENDAR = PublicationCalendar.from_dicts()
+        if _CALENDAR_PARQUET.exists():
+            _DEFAULT_CALENDAR = PublicationCalendar.from_parquet(_CALENDAR_PARQUET)
+        else:
+            _DEFAULT_CALENDAR = PublicationCalendar.from_dicts()
     return _DEFAULT_CALENDAR

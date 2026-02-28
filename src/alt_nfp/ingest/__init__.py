@@ -1,7 +1,7 @@
 """Raw data ingestion pipeline: produces vintage-tracked observation panels."""
 
 from .aggregate import aggregate_geo
-from .base import PANEL_SCHEMA, validate_panel
+from .base import PANEL_SCHEMA, empty_panel, validate_panel
 from .ces_national import ingest_ces_national
 from .ces_state import ingest_ces_state
 from .panel import build_panel, load_panel, save_panel
@@ -23,6 +23,7 @@ __all__ = [
     'PANEL_SCHEMA',
     'VINTAGE_STORE_PATH',
     'VINTAGE_STORE_SCHEMA',
+    'empty_panel',
     'aggregate_geo',
     'append_to_vintage_store',
     'build_panel',

@@ -22,7 +22,7 @@ import pymc as pm
 from scipy import stats as sp_stats
 
 from .config import OUTPUT_DIR
-from .data import build_obs_sources
+from .panel_adapter import build_obs_sources
 
 
 # =========================================================================

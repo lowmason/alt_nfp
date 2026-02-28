@@ -52,7 +52,7 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
         var_names.append("phi_3")
     for pp in pp_data:
         name = pp["config"].name.lower()
-        var_names.extend([f"alpha_{name}", f"lam_{name}", f"sigma_{name}"])
+        var_names.extend([f"alpha_{name}", f"lam_{name}", f"sigma_pp_{name}"])
         if pp["config"].error_model == "ar1":
             var_names.append(f"rho_{name}")
 
@@ -158,7 +158,7 @@ def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
         name = pp["config"].name.lower()
         lam_p = idata.posterior[f"lam_{name}"].values.flatten()
         alp_p = idata.posterior[f"alpha_{name}"].values.flatten()
-        sig_p = idata.posterior[f"sigma_{name}"].values.flatten()
+        sig_p = idata.posterior[f"sigma_pp_{name}"].values.flatten()
         extra = ""
         if pp["config"].error_model == "ar1":
             rho_p = idata.posterior[f"rho_{name}"].values.flatten()
@@ -225,7 +225,7 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
     total_prec_pp = 0.0
     for pp in pp_data:
         name = pp["config"].name.lower()
-        sig_p = idata.posterior[f"sigma_{name}"].values.flatten().mean()
+        sig_p = idata.posterior[f"sigma_pp_{name}"].values.flatten().mean()
         lam_p = idata.posterior[f"lam_{name}"].values.flatten().mean()
         n_obs = len(pp["pp_obs"])
         prec_p = lam_p**2 / sig_p**2
@@ -285,7 +285,7 @@ def plot_divergences(idata: az.InferenceData, data: dict) -> None:
         if pp["config"].error_model == "ar1":
             n = pp["config"].name.lower()
             pairs.append(
-                (f"rho_{n}", f"sigma_{n}", f"\u03c1_{pp['name']}", f"\u03c3_{pp['name']}")
+                (f"rho_{n}", f"sigma_pp_{n}", f"\u03c1_{pp['name']}", f"\u03c3_{pp['name']}")
             )
 
     n_pairs = len(pairs)

@@ -62,10 +62,8 @@ def _get_anchor_level(data: dict, march_year: int) -> float:
     1. ``data['panel']`` — if a panel DataFrame is present, extract the
        ``employment_level`` for CES NSA at March Y-1.  This is the
        preferred path when data comes from the vintage store.
-    2. ``data['levels']`` — fall back to the levels DataFrame.  Only
-       correct when levels are in BLS thousands (legacy ``load_data()``
-       with actual CES index values, not the base-100 reconstruction
-       from ``panel_to_model_data``).
+    2. ``data['levels']`` — fall back to the levels DataFrame from
+       ``panel_to_model_data`` (base-100 reconstructed indices).
 
     Raises
     ------
@@ -82,7 +80,7 @@ def _get_anchor_level(data: dict, march_year: int) -> float:
             (pl.col("source") == "ces_nsa")
             & (pl.col("period").dt.year() == target_year)
             & (pl.col("period").dt.month() == target_month)
-            & (pl.col("industry_code") == "05")
+            & (pl.col("industry_code").is_in(["00", "05"]))
             & (pl.col("geographic_type") == "national")
         )
         if not ces_nsa.is_empty():
@@ -180,8 +178,8 @@ def extract_benchmark_revision(
     idata : az.InferenceData
         Posterior inference data from the fitted model.
     data : dict
-        The loaded data dict (from ``load_data()``), containing model dates,
-        CES NSA growth rates, and level information.
+        The model data dict (from ``panel_to_model_data()``), containing
+        model dates, CES NSA growth rates, and level information.
     march_year : int
         The March reference year for the benchmark (e.g. 2025).
     anchor_level : float, optional

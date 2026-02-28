@@ -316,8 +316,15 @@ class BLSHttpClient:
         cache_key = f'qcew_{year}_{quarter}_{slice_type}_{slice_code}.csv'
         cache_path = self._cache_path(cache_key)
 
+        # Force text columns to Utf8 so values like "C1010" (CSA) and "US000" parse
+        qcew_text_cols = [
+            'area_fips', 'own_code', 'industry_code', 'agglvl_code', 'size_code',
+            'year', 'qtr', 'disclosure_code', 'lq_disclosure_code', 'oty_disclosure_code',
+        ]
+        schema_overrides = {c: pl.Utf8 for c in qcew_text_cols}
+
         if self._is_cache_valid(cache_path):
-            return pl.read_csv(cache_path)
+            return pl.read_csv(cache_path, schema_overrides=schema_overrides)
 
         url = f'{self.QCEW_CSV_BASE}/{year}/{quarter}/{slice_type}/{slice_code}.csv'
         response = self.session.get(url, timeout=60)
@@ -327,7 +334,7 @@ class BLSHttpClient:
         with open(cache_path, 'w', encoding='utf-8') as fh:
             fh.write(response.text)
 
-        return pl.read_csv(io.StringIO(response.text))
+        return pl.read_csv(io.StringIO(response.text), schema_overrides=schema_overrides)
 
     # ------------------------------------------------------------------
     # Internal: caching

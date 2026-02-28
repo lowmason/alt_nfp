@@ -19,7 +19,7 @@ import polars as pl
 
 from ..lookups.industry import CES_SERIES_MAP, get_supersector_codes
 from ..lookups.revision_schedules import CES_REVISIONS
-from .base import CES_VINTAGE_SCHEMA, PANEL_SCHEMA
+from .base import CES_VINTAGE_SCHEMA, PANEL_SCHEMA, empty_panel
 from .bls import BLSHttpClient, fetch_ces_national as bls_fetch_ces_national
 
 logger = logging.getLogger(__name__)
@@ -54,10 +54,10 @@ def fetch_ces_current(
         )
     except Exception as e:
         logger.warning(f'Failed to fetch CES national data: {e}')
-        return _empty_panel()
+        return empty_panel()
 
     if len(raw) == 0:
-        return _empty_panel()
+        return empty_panel()
 
     today = date.today()
     rows: list[dict] = []
@@ -116,7 +116,7 @@ def fetch_ces_current(
                 )
 
     if not rows:
-        return _empty_panel()
+        return empty_panel()
 
     return pl.DataFrame(rows, schema=PANEL_SCHEMA)
 
@@ -136,7 +136,7 @@ def load_ces_vintages(path: Path) -> pl.DataFrame:
     """
     if not path.exists():
         logger.info(f'CES vintage file not found: {path}')
-        return _empty_panel()
+        return empty_panel()
 
     raw = pl.read_parquet(path)
 
@@ -191,7 +191,7 @@ def load_ces_vintages(path: Path) -> pl.DataFrame:
                 )
 
     if not rows:
-        return _empty_panel()
+        return empty_panel()
 
     return pl.DataFrame(rows, schema=PANEL_SCHEMA)
 
@@ -241,7 +241,7 @@ def ingest_ces_national(
         logger.warning(f'Failed to fetch current CES data: {e}')
 
     if not parts:
-        return _empty_panel()
+        return empty_panel()
 
     combined = pl.concat(parts)
 
@@ -265,6 +265,3 @@ def ingest_ces_national(
 ingest_ces = ingest_ces_national
 
 
-def _empty_panel() -> pl.DataFrame:
-    """Return an empty DataFrame with PANEL_SCHEMA columns."""
-    return pl.DataFrame(schema=PANEL_SCHEMA)

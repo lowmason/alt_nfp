@@ -169,15 +169,14 @@ class TestValidatePanel:
         with pytest.raises(ValueError, match='payroll'):
             validate_panel(df)
 
-    def test_legacy_panel_builds(self):
-        """build_panel(use_legacy=True) produces a valid panel from existing CSVs."""
-        from alt_nfp.config import DATA_DIR
+    def test_panel_builds_from_vintage_store(self):
+        """build_panel() produces a valid panel from the vintage store."""
+        from alt_nfp.ingest.vintage_store import VINTAGE_STORE_PATH
 
-        ces_path = DATA_DIR / 'ces_index.csv'
-        if not ces_path.exists():
-            pytest.skip('Data files not present')
+        if not VINTAGE_STORE_PATH.exists():
+            pytest.skip('Vintage store not present')
 
-        panel = build_panel(use_legacy=True)
+        panel = build_panel()
         assert len(panel) > 0
         assert set(PANEL_SCHEMA.keys()).issubset(set(panel.columns))
 

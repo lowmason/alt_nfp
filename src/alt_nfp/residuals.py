@@ -84,7 +84,7 @@ def plot_residuals(idata: az.InferenceData, data: dict) -> None:
         idx_obs = pp["pp_obs"]
         alp_p = idata.posterior[f"alpha_{name}"].values.flatten().mean()
         lam_p = idata.posterior[f"lam_{name}"].values.flatten().mean()
-        sig_p = idata.posterior[f"sigma_{name}"].values.flatten().mean()
+        sig_p = idata.posterior[f"sigma_pp_{name}"].values.flatten().mean()
 
         mu_base = alp_p + lam_p * g_cont_nsa[idx_obs]
 

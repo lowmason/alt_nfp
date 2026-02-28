@@ -36,7 +36,7 @@ _REQUIRED_NON_NULL = {
 }
 
 # Valid values for categorical columns
-_VALID_INDUSTRY_LEVELS = {'supersector', 'sector'}
+_VALID_INDUSTRY_LEVELS = {'domain', 'supersector', 'sector'}
 _VALID_SOURCE_TYPES = {'official_sa', 'official_nsa', 'census', 'payroll'}
 _VALID_GEOGRAPHIC_TYPES = {'national', 'state', 'region', 'division'}
 
@@ -75,7 +75,7 @@ def validate_panel(df: pl.DataFrame) -> pl.DataFrame:
     # Check no duplicates on the full observation key
     _dup_cols = [
         'period', 'geographic_type', 'geographic_code',
-        'source', 'industry_code', 'revision_number',
+        'source', 'industry_level', 'industry_code', 'revision_number',
     ]
     dup_check = df.group_by(_dup_cols).len()
     dups = dup_check.filter(pl.col('len') > 1)
@@ -112,7 +112,12 @@ def validate_panel(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-# Parquet schemas for historical revision data (Task 2.7)
+def empty_panel() -> pl.DataFrame:
+    """Return an empty DataFrame conforming to PANEL_SCHEMA."""
+    return pl.DataFrame(schema=PANEL_SCHEMA)
+
+
+# Parquet schemas for historical revision data
 
 QCEW_VINTAGE_SCHEMA: dict[str, pl.DataType] = {
     'ref_year': pl.Int32,

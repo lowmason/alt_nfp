@@ -18,10 +18,11 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .config import OUTPUT_DIR, SIGMA_QCEW_M3, SIGMA_QCEW_M12
-from .data import load_data
+from .config import OUTPUT_DIR, PROVIDERS, SIGMA_QCEW_M3, SIGMA_QCEW_M12
 from .diagnostics import print_source_contributions
+from .ingest import build_panel
 from .model import build_model
+from .panel_adapter import panel_to_model_data
 from .sampling import MEDIUM_SAMPLER_KWARGS, sample_model
 
 # Configs: (label, sigma_m3, sigma_m12)
@@ -53,7 +54,8 @@ def run_sensitivity(
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Loading data\u2026")
-    data = load_data()
+    panel = build_panel()
+    data = panel_to_model_data(panel, PROVIDERS)
     print()
 
     # Parameters to compare — (display_name, posterior_key, pp_index_or_None, scale, fmt)
@@ -136,7 +138,7 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
         label = pp["name"]
         specs.append((f"\u03b1_{label} (%/mo)", f"alpha_{name}", None, 100, ".4f"))
         specs.append((f"\u03bb_{label}", f"lam_{name}", None, 1, ".3f"))
-        specs.append((f"\u03c3_{label} (%)", f"sigma_{name}", None, 100, ".3f"))
+        specs.append((f"\u03c3_{label} (%)", f"sigma_pp_{name}", None, 100, ".3f"))
         if pp["config"].error_model == "ar1":
             specs.append((f"\u03c1_{label}", f"rho_{name}", None, 1, ".3f"))
     return specs
@@ -190,7 +192,7 @@ def _precision_shares(
     total_pp = 0.0
     for pp in data["pp_data"]:
         name = pp["config"].name.lower()
-        sig_p = post[f"sigma_{name}"].values.flatten().mean()
+        sig_p = post[f"sigma_pp_{name}"].values.flatten().mean()
         lam_p = post[f"lam_{name}"].values.flatten().mean()
         n_obs = len(pp["pp_obs"])
         prec_p = lam_p**2 / sig_p**2

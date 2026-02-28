@@ -3,15 +3,22 @@
 Produces a levels-based, source-unified file suitable for revision analysis
 and diagnostics. Unlike the growth-rate-oriented ``observation_panel.parquet``,
 this file stores employment **levels** with full vintage/revision metadata.
+
+Can also fetch current CES estimates directly from BLS flat files via
+:func:`build_releases`.
 """
 
 from __future__ import annotations
 
+import logging
+from datetime import date
 from pathlib import Path
 
 import polars as pl
 
 from alt_nfp.config import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 RELEASES_PATH: Path = DATA_DIR / 'releases.parquet'
 
@@ -42,6 +49,118 @@ COMBINED_SCHEMA: dict[str, pl.DataType] = {
     'benchmark_revision': pl.UInt8,
     'employment': pl.Float64,
 }
+
+_DOMAIN_CODES = frozenset({'05', '06', '07', '08'})
+
+
+def _fetch_ces_releases() -> pl.DataFrame:
+    """Fetch current CES national estimates from BLS.
+
+    Tries the flat-file download first; falls back to the JSON API when
+    an API key is available.
+
+    Returns a DataFrame in :data:`COMBINED_SCHEMA` with ``revision=0``
+    and ``vintage_date`` set to today.
+    """
+    import os
+
+    from .bls import BLSHttpClient
+    from .bls.ces_national import CES_SERIES_MAP, fetch_ces_national, fetch_ces_national_via_api
+
+    api_key = os.environ.get('BLS_API_KEY')
+    client = BLSHttpClient(api_key=api_key)
+    try:
+        try:
+            raw = fetch_ces_national(client=client)
+        except Exception as exc:
+            logger.info(f'Flat-file download failed ({exc}), trying JSON API')
+            if not api_key:
+                logger.warning('No BLS_API_KEY set — cannot fall back to JSON API')
+                return pl.DataFrame(schema=COMBINED_SCHEMA)
+            all_ids = [
+                sid
+                for pair in CES_SERIES_MAP.values()
+                for sid in pair.values()
+            ]
+            today = date.today()
+            raw = fetch_ces_national_via_api(
+                all_ids,
+                start_year=2003,
+                end_year=today.year,
+                client=client,
+            )
+            if not raw.is_empty():
+                raw = raw.with_columns([
+                    raw['series_id'].str.slice(3, 2).alias('supersector_code'),
+                    pl.when(raw['series_id'].str.slice(2, 1) == 'S')
+                    .then(pl.lit(True))
+                    .otherwise(pl.lit(False))
+                    .alias('is_seasonally_adjusted'),
+                ])
+    finally:
+        client.close()
+
+    if raw.is_empty():
+        logger.warning('No CES data returned from BLS flat files')
+        return pl.DataFrame(schema=COMBINED_SCHEMA)
+
+    today = date.today()
+    return raw.select(
+        source=pl.lit('ces'),
+        seasonally_adjusted=pl.col('is_seasonally_adjusted'),
+        geographic_type=pl.lit('national'),
+        geographic_code=pl.lit('00'),
+        industry_type=(
+            pl.when(pl.col('supersector_code') == '00')
+            .then(pl.lit('national'))
+            .when(pl.col('supersector_code').is_in(list(_DOMAIN_CODES)))
+            .then(pl.lit('domain'))
+            .otherwise(pl.lit('supersector'))
+        ),
+        industry_code=pl.col('supersector_code'),
+        ref_date=pl.col('date'),
+        vintage_date=pl.lit(today),
+        revision=pl.lit(0, pl.UInt8),
+        benchmark_revision=pl.lit(None, pl.UInt8),
+        employment=pl.col('value'),
+    ).cast(COMBINED_SCHEMA)
+
+
+def build_releases(out_path: Path | None = None) -> pl.DataFrame:
+    """Fetch current BLS estimates and write ``releases.parquet``.
+
+    Currently fetches CES national data from BLS flat files. Additional
+    sources (QCEW, SAE) can be added by extending this function.
+
+    Parameters
+    ----------
+    out_path : Path or None
+        Output path. Defaults to ``data/releases.parquet``.
+
+    Returns
+    -------
+    pl.DataFrame
+        Combined releases DataFrame with :data:`COMBINED_SCHEMA`.
+    """
+    out_path = out_path or RELEASES_PATH
+
+    frames: list[pl.DataFrame] = []
+
+    print('  Fetching current CES national estimates from BLS...')
+    ces = _fetch_ces_releases()
+    if not ces.is_empty():
+        frames.append(ces)
+        print(f'  CES: {ces.height:,} rows')
+
+    if not frames:
+        out_df = pl.DataFrame(schema=COMBINED_SCHEMA)
+    else:
+        out_df = pl.concat(frames, how='diagonal_relaxed')
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.write_parquet(out_path)
+    print(f'  Wrote {out_df.height:,} rows to {out_path}')
+    return out_df
 
 
 def combine_estimates(

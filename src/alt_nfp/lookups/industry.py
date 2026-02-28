@@ -168,6 +168,72 @@ def sector_to_supersector_idx() -> np.ndarray:
     return np.array([ss_to_idx[sec_to_ss[sec]] for sec in sec_codes], dtype=np.intp)
 
 
+def get_supersector_components() -> dict[str, list[str]]:
+    """Map each supersector to its component NAICS-based sector codes.
+
+    Derived from :data:`_HIERARCHY_ROWS` (private sectors) plus government
+    sectors ``'91'``, ``'92'``, ``'93'`` under supersector ``'90'``.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Supersector code -> sorted list of component sector codes.
+        Sector codes are NAICS-based (e.g. ``'42'`` for Wholesale,
+        ``'44'`` for Retail).
+    """
+    result: dict[str, list[str]] = {}
+    for sector_code, _, ss_code, _, _, _ in _HIERARCHY_ROWS:
+        result.setdefault(ss_code, []).append(sector_code)
+    result['90'] = ['91', '92', '93']
+    return {k: sorted(v) for k, v in sorted(result.items())}
+
+
+# Supersector -> domain membership for aggregation.
+_GOODS_SUPERSECTORS = frozenset({'10', '20', '30'})
+_ALL_PRIVATE_SUPERSECTORS = frozenset(
+    get_supersector_codes()
+)  # excludes '90' which is added separately
+
+DOMAIN_DEFINITIONS: dict[str, dict] = {
+    '00': {'name': 'Total Non-Farm', 'includes_govt': True, 'goods_only': False},
+    '05': {'name': 'Total Private', 'includes_govt': False, 'goods_only': False},
+    '06': {'name': 'Goods-Producing', 'includes_govt': False, 'goods_only': True},
+    '07': {'name': 'Service-Providing', 'includes_govt': True, 'goods_only': False},
+    '08': {'name': 'Private Service-Providing', 'includes_govt': False, 'goods_only': False},
+}
+
+
+def get_domain_supersectors(domain_code: str) -> list[str]:
+    """Return the supersector codes that compose a given domain.
+
+    Parameters
+    ----------
+    domain_code : str
+        One of ``'00'``, ``'05'``, ``'06'``, ``'07'``, ``'08'``.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of supersector codes belonging to this domain.
+    """
+    all_private = sorted(_ALL_PRIVATE_SUPERSECTORS)
+    goods = sorted(_GOODS_SUPERSECTORS)
+    services_private = sorted(_ALL_PRIVATE_SUPERSECTORS - _GOODS_SUPERSECTORS)
+
+    if domain_code == '00':
+        return all_private + ['90']
+    elif domain_code == '05':
+        return all_private
+    elif domain_code == '06':
+        return goods
+    elif domain_code == '07':
+        return services_private + ['90']
+    elif domain_code == '08':
+        return services_private
+    else:
+        raise ValueError(f'Unknown domain code: {domain_code!r}')
+
+
 # ---------------------------------------------------------------------------
 # CES-to-QCEW industry cross-mapping
 # ---------------------------------------------------------------------------
@@ -217,31 +283,15 @@ _CES_SECTOR = [
     ('909300', '93', 'Local government'),
 ]
 
-# QCEW CSV API industry slice codes by supersector (BLS NAICS-based hierarchy).
-# '10' = total; '1011'-'1029' = supersectors.
-_QCEW_NAICS_BY_SUPERSECTOR: dict[str, str] = {
-    '10': '1011',   # Natural Resources and Mining
-    '20': '1012',   # Construction
-    '30': '1022',   # Manufacturing
-    '40': '1023',   # Trade, Transportation, and Utilities
-    '50': '1024',   # Information
-    '55': '1025',   # Financial Activities
-    '60': '1026',   # Professional and Business Services
-    '65': '1027',   # Education and Health Services
-    '70': '1028',   # Leisure and Hospitality
-    '80': '1029',   # Other Services
-    '90': '1029',   # Government (QCEW groups with Other; use 92 for gov)
-}
-_QCEW_NAICS_GOV = '92'
-
-# Sector-level: QCEW uses 2-digit NAICS codes directly.
-_QCEW_NAICS_BY_SECTOR: dict[str, str] = {
+# CES sector code → NAICS code.  Most are identity but CES uses its own
+# codes for Wholesale/Retail/Transportation that differ from NAICS.
+_CES_SECTOR_TO_NAICS: dict[str, str] = {
     '21': '21',     # Mining
-    '31': '31',     # Durable goods (NAICS 31-33)
-    '32': '32',     # Nondurable goods
-    '41': '41',     # Wholesale trade
-    '42': '42',     # Retail trade
-    '43': '43',     # Transportation and warehousing
+    '31': '31',     # Manufacturing (NAICS 31-33 mapped to simplified '31')
+    '32': '32',     # Nondurable goods (sub-split of manufacturing)
+    '41': '42',     # CES Wholesale trade → NAICS 42
+    '42': '44',     # CES Retail trade → NAICS 44 (simplified from 44-45)
+    '43': '48',     # CES Transportation → NAICS 48 (simplified from 48-49)
     '22': '22',     # Utilities
     '52': '52',     # Finance and insurance
     '53': '53',     # Real estate
@@ -255,6 +305,13 @@ _QCEW_NAICS_BY_SECTOR: dict[str, str] = {
     '91': '91',     # Federal government
     '92': '92',     # State government
     '93': '93',     # Local government
+}
+
+# Government ownership codes (QCEW) → CES sector codes.
+GOVT_OWNERSHIP_TO_SECTOR: dict[str, str] = {
+    '1': '91',  # Federal
+    '2': '92',  # State
+    '3': '93',  # Local
 }
 
 
@@ -290,38 +347,31 @@ def _build_industry_map() -> list[IndustryEntry]:
     """Build the canonical industry map across domain, supersector, and sector levels."""
     entries: list[IndustryEntry] = []
 
-    # Domain: use CES code as EN industry; QCEW slice 10 for total, 101 for private, etc.
-    domain_qcew = {'00': '10', '05': '101', '06': '101', '07': '102', '08': '102'}
+    # Domain: aggregated from supersectors, no direct QCEW download code.
     for ces_code, code, name in _CES_DOMAIN:
-        qcew = domain_qcew.get(code, '10')
         entries.append(IndustryEntry(
             industry_code=code,
             industry_type='domain',
             industry_name=name,
             ces_code=ces_code,
-            qcew_naics=qcew,
+            qcew_naics='',
             en_industry=ces_code,
         ))
 
-    # Supersector
+    # Supersector: aggregated from component sectors, no single QCEW code.
     for ces_code, code, name in _CES_SUPERSECTOR:
-        qcew = (
-            _QCEW_NAICS_BY_SUPERSECTOR.get(code, '10')
-            if code != '90'
-            else _QCEW_NAICS_GOV
-        )
         entries.append(IndustryEntry(
             industry_code=code,
             industry_type='supersector',
             industry_name=name,
             ces_code=ces_code,
-            qcew_naics=qcew,
+            qcew_naics='',
             en_industry=ces_code,
         ))
 
-    # Sector
+    # Sector: qcew_naics is the NAICS code that appears in QCEW responses.
     for ces_code, code, name in _CES_SECTOR:
-        qcew = _QCEW_NAICS_BY_SECTOR.get(code, code)
+        qcew = _CES_SECTOR_TO_NAICS.get(code, code)
         entries.append(IndustryEntry(
             industry_code=code,
             industry_type='sector',
@@ -339,43 +389,43 @@ INDUSTRY_MAP: list[IndustryEntry] = _build_industry_map()
 
 
 def qcew_to_sector() -> dict[str, str]:
-    """Return a mapping from QCEW API industry codes to simplified 2-digit sector codes.
+    """Return a mapping from QCEW codes to NAICS-based sector codes.
 
-    Derived from :data:`INDUSTRY_MAP` sector-level entries plus the QCEW CSV API
-    code scheme (``'1012'`` -> ``'21'``, etc.).
+    Maps both QCEW CSV API codes (``'1012'``, ``'1023'``, ...) and raw
+    NAICS codes (``'21'``, ``'42'``, ...) to the NAICS-based sector codes
+    used in :data:`_HIERARCHY_ROWS` and :func:`get_sector_codes`.
 
     Returns
     -------
     dict[str, str]
-        QCEW API code -> simplified sector code (e.g. ``'1012'`` -> ``'21'``).
+        QCEW code -> NAICS sector code (e.g. ``'1012'`` -> ``'21'``,
+        ``'42'`` -> ``'42'``).
     """
-    # Map from QCEW CSV API codes to our sector codes
-    # These are the 4-digit API codes used in the QCEW CSV download URLs
-    _api_code_to_sector: dict[str, str] = {
-        '1012': '21',  # Mining
-        '1013': '22',  # Utilities
-        '1021': '23',  # Construction
-        '1022': '31',  # Manufacturing (31-33)
-        '1023': '42',  # Wholesale Trade
-        '1024': '44',  # Retail Trade (44-45)
-        '1025': '48',  # Transportation and Warehousing (48-49)
-        '1026': '51',  # Information
-        '1027': '52',  # Finance and Insurance
-        '1028': '53',  # Real Estate
-        '1029': '54',  # Professional and Technical Services
-        '102A': '55',  # Management of Companies
-        '102B': '56',  # Administrative and Waste Services
-        '102C': '61',  # Educational Services
-        '102D': '62',  # Health Care and Social Assistance
-        '102E': '71',  # Arts, Entertainment, and Recreation
-        '102F': '72',  # Accommodation and Food Services
-        '102G': '81',  # Other Services
+    # 4-digit QCEW CSV API codes → NAICS-based sector codes
+    mapping: dict[str, str] = {
+        '1012': '21',  # Mining (NAICS 21)
+        '1013': '22',  # Utilities (NAICS 22)
+        '1021': '23',  # Construction (NAICS 23)
+        '1022': '31',  # Manufacturing (NAICS 31-33, simplified to '31')
+        '1023': '42',  # Wholesale Trade (NAICS 42)
+        '1024': '44',  # Retail Trade (NAICS 44-45, simplified to '44')
+        '1025': '48',  # Transportation (NAICS 48-49, simplified to '48')
+        '1026': '51',  # Information (NAICS 51)
+        '1027': '52',  # Finance and Insurance (NAICS 52)
+        '1028': '53',  # Real Estate (NAICS 53)
+        '1029': '54',  # Professional Services (NAICS 54)
+        '102A': '55',  # Management of Companies (NAICS 55)
+        '102B': '56',  # Administrative Services (NAICS 56)
+        '102C': '61',  # Educational Services (NAICS 61)
+        '102D': '62',  # Health Care (NAICS 62)
+        '102E': '71',  # Arts and Recreation (NAICS 71)
+        '102F': '72',  # Accommodation and Food (NAICS 72)
+        '102G': '81',  # Other Services (NAICS 81)
     }
-    # Also include raw NAICS codes that may appear in API responses
-    for entry in INDUSTRY_MAP:
-        if entry.industry_type == 'sector':
-            _api_code_to_sector[entry.qcew_naics] = entry.industry_code
-    return _api_code_to_sector
+    # Raw NAICS codes that appear in QCEW response data → identity mapping
+    for sector_code, _, _, _, _, _ in _HIERARCHY_ROWS:
+        mapping[sector_code] = sector_code
+    return mapping
 
 
 def en_series_id(

@@ -1,8 +1,8 @@
 """Payroll provider data ingestion.
 
-Loads payroll provider files with a standard multi-dimensional schema::
+Loads payroll provider parquet files with a standard multi-dimensional schema::
 
-    ref_date, geography_type, geography_code,
+    ref_date, geographic_type, geographic_code,
     industry_type, industry_code, employment, [birth_rate]
 
 Filters to the slice specified by :class:`~alt_nfp.config.ProviderConfig`
@@ -20,20 +20,17 @@ import numpy as np
 import polars as pl
 
 from ..config import DATA_DIR, ProviderConfig
-from .base import PANEL_SCHEMA
+from .base import PANEL_SCHEMA, empty_panel
 
 logger = logging.getLogger(__name__)
 
 
 def read_provider_table(fpath: Path) -> pl.DataFrame | None:
-    """Read a provider CSV or Parquet file; return sorted by ref_date, or None on failure."""
+    """Read a provider parquet file; return sorted by ref_date, or None on failure."""
     if not fpath.exists():
         return None
     try:
-        if fpath.suffix.lower() == ".parquet":
-            raw = pl.read_parquet(str(fpath))
-        else:
-            raw = pl.read_csv(str(fpath), try_parse_dates=True)
+        raw = pl.read_parquet(str(fpath))
     except Exception as e:
         logger.warning("Failed to read provider file %s: %s", fpath, e)
         return None
@@ -119,13 +116,13 @@ def ingest_provider(
     raw = read_provider_table(fpath)
     if raw is None:
         logger.warning("Provider file not found or unreadable: %s", fpath)
-        return _empty_panel()
+        return empty_panel()
 
     if "employment" not in raw.columns:
         logger.warning(
             "Column 'employment' not found in %s. Available: %s", fpath, raw.columns
         )
-        return _empty_panel()
+        return empty_panel()
 
     filter_cols = {
         "geography_type": config.geography_type,
@@ -142,7 +139,7 @@ def ingest_provider(
     raw = raw.select(["ref_date", "employment"]).drop_nulls()
 
     if len(raw) < 2:
-        return _empty_panel()
+        return empty_panel()
 
     ref_dates = raw["ref_date"].to_list()
     levels = raw["employment"].to_numpy().astype(float)
@@ -188,11 +185,8 @@ def ingest_provider(
             )
 
     if not rows:
-        return _empty_panel()
+        return empty_panel()
 
     return pl.DataFrame(rows, schema=PANEL_SCHEMA)
 
 
-def _empty_panel() -> pl.DataFrame:
-    """Return an empty DataFrame with PANEL_SCHEMA columns."""
-    return pl.DataFrame(schema=PANEL_SCHEMA)

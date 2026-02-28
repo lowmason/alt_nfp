@@ -6,12 +6,15 @@ Usage::
     python -m alt_nfp.vintages release      # Scrape release dates
     python -m alt_nfp.vintages download     # Download CES + QCEW revision files
     python -m alt_nfp.vintages process      # Process CES, SAE, QCEW revisions
+    python -m alt_nfp.vintages releases     # Fetch current BLS estimates
     python -m alt_nfp.vintages build        # Combine + build vintage_store
 """
 
 from __future__ import annotations
 
 import sys
+
+from dotenv import load_dotenv
 
 
 def cmd_release() -> None:
@@ -99,12 +102,14 @@ def cmd_release() -> None:
 
 def cmd_download() -> None:
     """Download CES and QCEW data files."""
-    from alt_nfp.vintages.download import download_ces, download_qcew
+    from alt_nfp.vintages.download import download_ces, download_qcew, download_qcew_bulk
 
     print('Downloading CES vintage data...')
     download_ces()
     print('Downloading QCEW revisions CSV...')
     download_qcew()
+    print('Downloading QCEW bulk quarterly files (2003-2025)...')
+    download_qcew_bulk()
     print('Done.')
 
 
@@ -125,6 +130,14 @@ def cmd_process() -> None:
     combine_main()
 
 
+def cmd_releases() -> None:
+    """Fetch current BLS estimates and write releases.parquet."""
+    from alt_nfp.ingest.releases import build_releases
+
+    print('=== Building releases.parquet ===')
+    build_releases()
+
+
 def cmd_build() -> None:
     """Build the Hive-partitioned vintage store."""
     from alt_nfp.vintages.build_store import build_store
@@ -143,12 +156,14 @@ def cmd_build() -> None:
 
 def main() -> None:
     """Dispatch to a subcommand, or run all stages if none is given."""
+    load_dotenv()
     args = sys.argv[1:]
 
     if not args:
         cmd_release()
         cmd_download()
         cmd_process()
+        cmd_releases()
         cmd_build()
         return
 
@@ -157,12 +172,16 @@ def main() -> None:
         'release': cmd_release,
         'download': cmd_download,
         'process': cmd_process,
+        'releases': cmd_releases,
         'build': cmd_build,
     }
     handler = dispatch.get(subcommand)
     if handler is None:
         print(f'Unknown subcommand: {subcommand}')
-        print('Usage: python -m alt_nfp.vintages [release|download|process|build]')
+        print(
+            'Usage: python -m alt_nfp.vintages '
+            '[release|download|process|releases|build]'
+        )
         sys.exit(1)
     handler()
 

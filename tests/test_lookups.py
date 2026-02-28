@@ -7,20 +7,23 @@ from alt_nfp.lookups import (
     CES_REVISIONS,
     CES_SERIES_MAP,
     DIVISION_NAMES,
+    DOMAIN_DEFINITIONS,
     FIPS_TO_DIVISION,
     FIPS_TO_REGION,
     GEOGRAPHY_HIERARCHY,
+    GOVT_OWNERSHIP_TO_SECTOR,
     INDUSTRY_HIERARCHY,
     INDUSTRY_MAP,
-    IndustryEntry,
     QCEW_REVISIONS,
     REGION_NAMES,
     STATES,
     en_series_id,
     en_series_id_for_state,
     get_domain_codes,
+    get_domain_supersectors,
     get_sector_codes,
     get_supersector_codes,
+    get_supersector_components,
     qcew_to_sector,
     sector_to_supersector_idx,
     supersector_to_domain_idx,
@@ -250,10 +253,20 @@ class TestIndustryMap:
         with pytest.raises(AttributeError):
             entry.industry_code = 'XX'
 
-    def test_every_entry_has_qcew_naics(self):
-        """Every INDUSTRY_MAP entry has a non-empty qcew_naics."""
+    def test_sector_entries_have_qcew_naics(self):
+        """Sector-level INDUSTRY_MAP entries have non-empty qcew_naics."""
         for entry in INDUSTRY_MAP:
-            assert entry.qcew_naics, f'{entry.industry_code} has empty qcew_naics'
+            if entry.industry_type == 'sector':
+                assert entry.qcew_naics, f'{entry.industry_code} has empty qcew_naics'
+
+    def test_aggregate_entries_have_empty_qcew_naics(self):
+        """Supersector and domain entries have empty qcew_naics (aggregated)."""
+        for entry in INDUSTRY_MAP:
+            if entry.industry_type in ('supersector', 'domain'):
+                assert entry.qcew_naics == '', (
+                    f'{entry.industry_code} ({entry.industry_type}) should have '
+                    f'empty qcew_naics, got {entry.qcew_naics!r}'
+                )
 
     def test_every_entry_has_ces_code(self):
         """Every INDUSTRY_MAP entry has a 6-digit ces_code."""
@@ -265,12 +278,28 @@ class TestIndustryMap:
     def test_qcew_to_sector_mapping(self):
         """qcew_to_sector() returns expected mappings for known codes."""
         mapping = qcew_to_sector()
+        # QCEW API codes -> NAICS sector codes
         assert mapping['1012'] == '21'   # Mining
         assert mapping['1022'] == '31'   # Manufacturing
+        assert mapping['1023'] == '42'   # Wholesale (NAICS 42)
+        assert mapping['1024'] == '44'   # Retail (NAICS 44-45)
+        assert mapping['1025'] == '48'   # Transport (NAICS 48-49)
         assert mapping['102F'] == '72'   # Accommodation
-        # Raw NAICS codes are also mapped
+        # Raw NAICS codes -> identity (NAICS-based hierarchy)
         assert mapping['21'] == '21'
+        assert mapping['42'] == '42'    # Wholesale
+        assert mapping['44'] == '44'    # Retail
+        assert mapping['48'] == '48'    # Transport
         assert mapping['72'] == '72'
+
+    def test_sector_qcew_naics_correctness(self):
+        """CES sectors 41/42/43 have NAICS (not CES) codes in qcew_naics."""
+        ces_41 = next(e for e in INDUSTRY_MAP if e.industry_code == '41')
+        ces_42 = next(e for e in INDUSTRY_MAP if e.industry_code == '42')
+        ces_43 = next(e for e in INDUSTRY_MAP if e.industry_code == '43')
+        assert ces_41.qcew_naics == '42', 'CES Wholesale → NAICS 42'
+        assert ces_42.qcew_naics == '44', 'CES Retail → NAICS 44'
+        assert ces_43.qcew_naics == '48', 'CES Transport → NAICS 48'
 
     def test_en_series_id_format(self):
         """EN series IDs have expected prefix and length."""
@@ -292,3 +321,204 @@ class TestIndustryMap:
         sid_all = en_series_id(total_nf, ownership='0')
         sid_prv = en_series_id(total_nf, ownership='5')
         assert sid_all != sid_prv, 'Different ownership should produce different IDs'
+
+
+class TestSupersectorComponents:
+    """Tests for supersector component mappings and domain definitions."""
+
+    def test_all_supersectors_present(self):
+        """get_supersector_components covers all 10 private + government."""
+        sc = get_supersector_components()
+        expected = {'10', '20', '30', '40', '50', '55', '60', '65', '70', '80', '90'}
+        assert set(sc.keys()) == expected
+
+    def test_ttu_components(self):
+        """Supersector 40 (TTU) = Wholesale + Retail + Transport + Utilities."""
+        sc = get_supersector_components()
+        assert sorted(sc['40']) == ['22', '42', '44', '48']
+
+    def test_financial_components(self):
+        """Supersector 55 (Financial) = Finance + Real Estate."""
+        sc = get_supersector_components()
+        assert sorted(sc['55']) == ['52', '53']
+
+    def test_government_components(self):
+        """Supersector 90 (Government) = Federal + State + Local."""
+        sc = get_supersector_components()
+        assert sorted(sc['90']) == ['91', '92', '93']
+
+    def test_component_sectors_in_hierarchy(self):
+        """All component sector codes exist in the sector list or are govt."""
+        sc = get_supersector_components()
+        hierarchy_sectors = set(get_sector_codes())
+        govt_sectors = {'91', '92', '93'}
+        for ss, sectors in sc.items():
+            for s in sectors:
+                assert s in hierarchy_sectors or s in govt_sectors, (
+                    f'Sector {s} in supersector {ss} not in hierarchy or govt'
+                )
+
+    def test_domain_definitions(self):
+        """Domain definitions exist for all 5 codes."""
+        assert set(DOMAIN_DEFINITIONS.keys()) == {'00', '05', '06', '07', '08'}
+
+    def test_domain_00_includes_government(self):
+        """Domain 00 (Total Non-Farm) includes supersector 90."""
+        ss = get_domain_supersectors('00')
+        assert '90' in ss
+
+    def test_domain_05_excludes_government(self):
+        """Domain 05 (Total Private) excludes supersector 90."""
+        ss = get_domain_supersectors('05')
+        assert '90' not in ss
+
+    def test_domain_06_goods_only(self):
+        """Domain 06 (Goods-Producing) includes only goods supersectors."""
+        ss = get_domain_supersectors('06')
+        assert set(ss) == {'10', '20', '30'}
+
+    def test_domain_07_service_with_govt(self):
+        """Domain 07 (Service-Providing) includes services + government."""
+        ss = get_domain_supersectors('07')
+        assert '90' in ss
+        assert '10' not in ss  # goods excluded
+
+    def test_domain_08_private_service(self):
+        """Domain 08 (Private Service-Providing) excludes goods and govt."""
+        ss = get_domain_supersectors('08')
+        assert '90' not in ss
+        assert '10' not in ss
+
+    def test_govt_ownership_mapping(self):
+        """Government ownership codes map to correct CES sectors."""
+        assert GOVT_OWNERSHIP_TO_SECTOR == {'1': '91', '2': '92', '3': '93'}
+
+
+class TestAggregation:
+    """Tests for QCEW aggregation logic."""
+
+    def test_aggregate_to_hierarchy_basic(self):
+        """aggregate_to_hierarchy produces sector, supersector, domain rows."""
+        from datetime import date
+
+        import polars as pl
+
+        from alt_nfp.ingest.qcew import aggregate_to_hierarchy
+
+        rows = []
+        for month in range(1, 4):
+            for sector in ['52', '53']:
+                rows.append({
+                    'industry_code': sector,
+                    'ref_date': date(2023, month, 1),
+                    'employment': 100000,
+                    'qtr': 1,
+                    'geographic_type': 'national',
+                    'geographic_code': 'US',
+                })
+
+        df = pl.DataFrame(rows)
+        result = aggregate_to_hierarchy(df)
+
+        levels = set(result['industry_level'].unique().to_list())
+        assert levels == {'sector', 'supersector', 'domain'}
+
+    def test_supersector_sums_components(self):
+        """Supersector employment equals sum of component sector employment."""
+        from datetime import date
+
+        import polars as pl
+
+        from alt_nfp.ingest.qcew import aggregate_to_hierarchy
+
+        d = date(2023, 1, 1)
+        rows = [
+            {'industry_code': '52', 'ref_date': d, 'employment': 100,
+             'qtr': 1, 'geographic_type': 'national', 'geographic_code': 'US'},
+            {'industry_code': '53', 'ref_date': d, 'employment': 50,
+             'qtr': 1, 'geographic_type': 'national', 'geographic_code': 'US'},
+        ]
+        result = aggregate_to_hierarchy(pl.DataFrame(rows))
+
+        ss55 = result.filter(
+            (pl.col('industry_code') == '55')
+            & (pl.col('industry_level') == 'supersector')
+        )
+        assert len(ss55) == 1
+        assert ss55['employment'][0] == 150
+
+    def test_domain_private_excludes_govt(self):
+        """Domain 05 (Total Private) excludes government employment."""
+        from datetime import date
+
+        import polars as pl
+
+        from alt_nfp.ingest.qcew import aggregate_to_hierarchy
+
+        d = date(2023, 1, 1)
+        rows = [
+            {'industry_code': '51', 'ref_date': d, 'employment': 300,
+             'qtr': 1, 'geographic_type': 'national', 'geographic_code': 'US'},
+            {'industry_code': '91', 'ref_date': d, 'employment': 100,
+             'qtr': 1, 'geographic_type': 'national', 'geographic_code': 'US'},
+        ]
+        result = aggregate_to_hierarchy(pl.DataFrame(rows))
+
+        d05 = result.filter(
+            (pl.col('industry_code') == '05')
+            & (pl.col('industry_level') == 'domain')
+        )
+        d00 = result.filter(
+            (pl.col('industry_code') == '00')
+            & (pl.col('industry_level') == 'domain')
+        )
+        assert d05['employment'][0] == 300
+        assert d00['employment'][0] == 400
+
+    def test_build_growth_panel_schema(self):
+        """_build_growth_panel produces PANEL_SCHEMA-conforming output."""
+        from datetime import date
+
+        import polars as pl
+
+        from alt_nfp.ingest.base import PANEL_SCHEMA
+        from alt_nfp.ingest.qcew import _build_growth_panel, aggregate_to_hierarchy
+
+        rows = []
+        for month in range(1, 7):
+            rows.append({
+                'industry_code': '51', 'ref_date': date(2023, month, 1),
+                'employment': 100000 + month * 1000,
+                'qtr': (month - 1) // 3 + 1,
+                'geographic_type': 'national', 'geographic_code': 'US',
+            })
+
+        all_levels = aggregate_to_hierarchy(pl.DataFrame(rows))
+        panel = _build_growth_panel(all_levels)
+
+        assert set(panel.columns) == set(PANEL_SCHEMA.keys())
+        for col, dtype in PANEL_SCHEMA.items():
+            assert panel.schema[col] == dtype, f'{col}: {panel.schema[col]} != {dtype}'
+
+    def test_government_extraction(self):
+        """_extract_government_employment maps ownership to CES sectors."""
+        import polars as pl
+
+        from alt_nfp.ingest.qcew import _extract_government_employment
+
+        raw = pl.DataFrame({
+            'own_code': ['1', '2', '3', '5'],
+            'industry_code': ['10', '10', '10', '10'],
+            'year': [2023, 2023, 2023, 2023],
+            'qtr': [1, 1, 1, 1],
+            'month1_emplvl': [100, 200, 400, 9999],
+            'month2_emplvl': [101, 201, 401, 9999],
+            'month3_emplvl': [102, 202, 402, 9999],
+            'geographic_type': ['national'] * 4,
+            'geographic_code': ['US'] * 4,
+        })
+        result = _extract_government_employment(raw)
+
+        codes = sorted(result['industry_code'].unique().to_list())
+        assert codes == ['91', '92', '93']
+        assert len(result) == 9  # 3 ownership × 3 months

@@ -36,7 +36,7 @@ def build_model(
     Parameters
     ----------
     data : dict
-        Output of :func:`alt_nfp.data.load_data`.
+        Output of :func:`alt_nfp.panel_adapter.panel_to_model_data`.
     sigma_qcew_m3 : float, optional
         Override QCEW quarter-end noise.  Defaults to config value.
     sigma_qcew_m12 : float, optional
@@ -106,14 +106,15 @@ def build_model(
             shape=K,
         )
 
-        # GRW on Fourier coefficients: shape (n_years, 2*K)
-        # Columns 0..K-1 are A_k, columns K..2K-1 are B_k
+        # GRW on Fourier coefficients: shape (2*K, n_years) so the walk is along
+        # the year axis (PyMC GRW steps along the last dimension).
+        # Rows 0..K-1 are A_k, rows K..2K-1 are B_k.
         sigma_vec = pt.tile(sigma_fourier, 2)  # (2K,)
         fourier_coefs = pm.GaussianRandomWalk(
             'fourier_coefs',
             sigma=sigma_vec,
             init_dist=pm.Normal.dist(0, 0.015),
-            shape=(n_years, 2 * K),
+            shape=(2 * K, n_years),
         )
 
         # Evaluate seasonal at each observation t
@@ -121,12 +122,13 @@ def build_model(
         cos_basis = pt.cos(2 * np.pi * k_vals * month_of_year[:, None] / 12)  # (T, K)
         sin_basis = pt.sin(2 * np.pi * k_vals * month_of_year[:, None] / 12)  # (T, K)
 
-        A_t = fourier_coefs[year_of_obs, :K]   # (T, K)
-        B_t = fourier_coefs[year_of_obs, K:]   # (T, K)
+        # fourier_coefs is (2*K, n_years); index by year then take .T for (T, K)
+        A_t = fourier_coefs[:K, year_of_obs].T   # (T, K)
+        B_t = fourier_coefs[K:, year_of_obs].T   # (T, K)
 
         s_t = pt.sum(A_t * cos_basis + B_t * sin_basis, axis=1)  # (T,)
         pm.Deterministic('seasonal', s_t)            # per-obs seasonal value
-        pm.Deterministic('fourier_coefs_det', fourier_coefs)  # (n_years, 2K)
+        pm.Deterministic('fourier_coefs_det', fourier_coefs.T)  # (n_years, 2K) for downstream
 
         # =============================================================
         # Structural birth/death offset
@@ -240,11 +242,13 @@ def build_model(
             name = cfg.name.lower()
             obs_idx = pp["pp_obs"]
             y_obs = pp["g_pp"][obs_idx]
+            if len(obs_idx) == 0:
+                continue  # skip providers with no observations (e.g. censored backtest)
 
-            # Per-provider measurement parameters
+            # Per-provider measurement parameters (sigma_pp_* to avoid collision with latent sigma_g)
             alpha_p = pm.Normal(f"alpha_{name}", 0, 0.005)
             lam_p = pm.Normal(f"lam_{name}", 1.0, 0.15)
-            sigma_p = pm.InverseGamma(f"sigma_{name}", alpha=3.0, beta=0.004)
+            sigma_p = pm.InverseGamma(f"sigma_pp_{name}", alpha=3.0, beta=0.004)
 
             mu_base = alpha_p + lam_p * g_cont_nsa[obs_idx]
 

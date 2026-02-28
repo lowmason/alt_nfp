@@ -60,7 +60,7 @@ alt_nfp/
 ├── src/alt_nfp/              # Core Python package
 │   ├── __init__.py           # Package exports
 │   ├── config.py             # ProviderConfig, PROVIDERS list, paths, constants
-│   ├── data.py               # Legacy data loading
+│   ├── panel_adapter.py      # Panel → model data dict, cyclical indicators, obs sources
 │   ├── model.py              # PyMC model definition
 │   ├── sampling.py           # sample_model() — nutpie/PyMC with preset configs
 │   ├── diagnostics.py        # Parameter summary, source contributions, divergences
@@ -112,10 +112,17 @@ alt_nfp/
 │           ├── qcew.py           # QCEW vintage processing
 │           ├── sae_states.py     # State and Area Employment processing
 │           └── combine.py        # Combine vintage files
-├── data/                     # Input CSV data (CES, QCEW, payroll provider indices)
-│   └── raw/                  # Historical revision data
-│       ├── vintages/         # Parquet files (QCEW/CES vintages, pub calendar)
-│       └── providers/        # Raw provider data by provider
+├── data/                     # Input data (all Parquet)
+│   └── raw/
+│       ├── vintages/         # BLS vintage data + publication calendar
+│       │   ├── vintage_store/          # Hive-partitioned parquet dataset (CES, QCEW, SAE)
+│       │   │   ├── source=ces/         #   partitioned by source × seasonally_adjusted
+│       │   │   ├── source=qcew/
+│       │   │   └── source=sae/
+│       │   └── publication_calendar.parquet
+│       └── providers/        # Payroll provider data (one dir per provider)
+│           └── G/g_provider.parquet    # Same schema as vintage_store minus
+│                                       #   revision, benchmark_revision, vintage_date
 ├── tests/                    # Test suite
 │   ├── test_lookups.py       # Industry hierarchy & revision schedule tests
 │   ├── test_ingest.py        # Panel validation & schema tests
@@ -151,12 +158,12 @@ alt_nfp/
 - **Config-driven providers**: adding a new payroll provider requires only a new `ProviderConfig` entry in `config.py`; data loading, model likelihood, diagnostics, plots, and forecasts adapt automatically.
 - **Structural birth/death model**: `bd_t = φ₀ + φ₁·X^cycle + φ₂·BD^QCEW_{t-L} + σ_bd·ξ_t` replaces the v2 constant BD offset.
 - **Provider-specific error structures**: each provider can have `iid` or `ar1` measurement error.
-- `alt_nfp_estimation_v3.py` is a thin runner that orchestrates: data loading → model building → prior checks → sampling → diagnostics → PPC → LOO → plots → forecast → save.
-- Data is loaded from CSV files in `data/` using Polars, transformed to growth rates.
+- `alt_nfp_estimation_v3.py` is a thin runner: `build_panel()` → `panel_to_model_data()` → `build_model()` → prior checks → sampling → diagnostics → PPC → LOO → plots → forecast → save.
+- **Data pipeline**: `build_panel()` (`ingest/panel.py`) reads the vintage store + provider parquet files → `panel_to_model_data()` (`panel_adapter.py`) converts the panel to model arrays (growth rates, BD covariates, cyclical indicators). Provider files share the vintage store schema but omit `revision`, `benchmark_revision`, and `vintage_date` (no vintages for provider data; `ref_date` determines currency).
 - PyMC models are built declaratively; sampling uses nutpie when available.
 - Output artifacts (NetCDF inference data, PNG plots) go to `output/`.
 - **BLS API client** (`ingest/bls/`): structured HTTP layer for downloading CES and QCEW data directly from BLS. `_programs.py` defines program metadata; `_http.py` handles request transport.
-- **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. Runnable as `python -m alt_nfp.vintages`. Vintage store (`ingest/vintage_store.py`) handles parquet-based storage/retrieval.
+- **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. Runnable as `python -m alt_nfp.vintages`. The canonical output is `data/raw/vintages/vintage_store/`, a Hive-partitioned parquet dataset holding all current and prior vintages of CES, QCEW, and SAE data, partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
 - **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to determine data availability windows for real-time vintage construction.
 - **Publication date lookups** (`lookups/publication_dates.py`): hard-coded BLS release dates for CES, QCEW, and SAE programs, scraped from BLS schedule pages. `update_schedule.py` fetches new dates and prints copy-paste-ready dict entries. `scripts/build_publication_calendar.py` merges historical + hard-coded dates into `publication_calendar.parquet`.
 - **`@pytest.mark.network`**: tests requiring network access are marked; deselect with `-m "not network"`.

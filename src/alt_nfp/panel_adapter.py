@@ -2,11 +2,12 @@
 # alt_nfp.panel_adapter — Panel to model data dict
 # ---------------------------------------------------------------------------
 """Convert a PANEL_SCHEMA observation panel into the dict consumed by
-build_model(), diagnostics, and plots (same shape as load_data() output).
+build_model(), diagnostics, and plots.
 """
 
 from __future__ import annotations
 
+import warnings
 from datetime import date
 
 import numpy as np
@@ -15,17 +16,32 @@ import polars as pl
 from .config import (
     BD_QCEW_LAG,
     CYCLICAL_INDICATORS,
+    DATA_DIR,
     PP_COLORS,
     ProviderConfig,
 )
-from .data import _load_cyclical_indicators
 from .ingest.payroll import load_provider_series
+
+_CYCLICAL_PUBLICATION_LAGS: dict[str, int] = {
+    "claims": 1,
+    "nfci": 1,
+    "biz_apps": 2,
+}
+
+
+def _offset_month(d: date, months: int) -> date:
+    """Add *months* to a date, returning the 1st of the resulting month."""
+    total = d.month + months
+    year = d.year + (total - 1) // 12
+    month = ((total - 1) % 12) + 1
+    return date(year, month, 1)
 
 
 def panel_to_model_data(
     panel: pl.DataFrame,
     providers: list[ProviderConfig],
     censor_ces_from: date | None = None,
+    as_of: date | None = None,
     *,
     geographic_code: str = "US",
     industry_code: str = "05",
@@ -40,6 +56,12 @@ def panel_to_model_data(
         Provider list (e.g. from config.PROVIDERS).
     censor_ces_from : date, optional
         If set, treat CES SA/NSA as missing from this date onward (for backtests).
+        Ignored when *as_of* is provided.
+    as_of : date, optional
+        Universal censoring cutoff.  When set, observations whose
+        ``vintage_date`` exceeds *as_of* are dropped before growth-rate
+        extraction, and cyclical indicators are masked using their
+        respective publication lags.  Supersedes *censor_ces_from*.
     geographic_code : str
         Geographic code to use for the main series (default 'US'; use '00' for
         vintage store convention).
@@ -52,9 +74,19 @@ def panel_to_model_data(
     Returns
     -------
     dict
-        Same structure as :func:`alt_nfp.data.load_data` for use with
-        :func:`alt_nfp.model.build_model` and downstream steps.
+        Dict consumed by :func:`alt_nfp.model.build_model` and downstream
+        diagnostics/plotting functions.
     """
+    if as_of is not None and "vintage_date" in panel.columns:
+        panel = panel.filter(
+            pl.col("vintage_date").is_null() | (pl.col("vintage_date") <= as_of)
+        )
+    elif as_of is not None:
+        warnings.warn(
+            "Panel lacks vintage_date column; as_of censoring is incomplete.",
+            stacklevel=2,
+        )
+
     # Restrict to national scope and chosen industry (no fallback 05→00 so we
     # stay private-only when matching legacy; vintage store often has '00' only)
     geo_filter = pl.col("geographic_code").is_in([geographic_code, "00", "US"])
@@ -104,7 +136,7 @@ def panel_to_model_data(
     g_ces_nsa = _growth_series("ces_nsa")
     g_qcew = _growth_series("qcew")
 
-    if censor_ces_from is not None:
+    if censor_ces_from is not None and as_of is None:
         for i, d in enumerate(dates):
             if d >= censor_ces_from:
                 g_ces_sa[i:] = np.nan
@@ -220,6 +252,18 @@ def panel_to_model_data(
 
     cyclical = _load_cyclical_indicators(dates, T)
 
+    if as_of is not None:
+        for spec in CYCLICAL_INDICATORS:
+            key = f"{spec['name']}_c"
+            arr = cyclical.get(key)
+            if arr is None:
+                continue
+            lag = _CYCLICAL_PUBLICATION_LAGS.get(spec["name"], 1)
+            for i, d in enumerate(dates):
+                if _offset_month(d, lag) > as_of:
+                    arr[i:] = 0.0
+                    break
+
     # Levels: ref_date + index columns (reconstruct from growth for compatibility)
     levels_df = _build_levels_from_growth(
         dates=dates,
@@ -269,6 +313,7 @@ def panel_to_model_data(
         print(f"  {pp['name']:5} mean growth: {np.nanmean(pp['g_pp']) * 100:+.4f}%/mo")
 
     return dict(
+        panel=panel,
         levels=levels_df,
         dates=dates,
         T=T,
@@ -296,6 +341,84 @@ def panel_to_model_data(
         has_ces_vintage=has_ces_vintage,
         **cyclical,
     )
+
+
+def build_obs_sources(data: dict) -> dict:
+    """Build ``{var_name: (label, observed_array)}`` used by predictive checks."""
+    sources: dict[str, tuple[str, np.ndarray]] = {}
+
+    vintage_labels = ['1st print', '2nd print', 'Final']
+    for v in range(3):
+        g_sa_v = data['g_ces_sa_by_vintage'][v]
+        obs_v = np.where(np.isfinite(g_sa_v))[0]
+        if len(obs_v) > 0:
+            sources[f'obs_ces_sa_v{v + 1}'] = (
+                f'CES SA ({vintage_labels[v]})', g_sa_v[obs_v]
+            )
+        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
+        obs_v_nsa = np.where(np.isfinite(g_nsa_v))[0]
+        if len(obs_v_nsa) > 0:
+            sources[f'obs_ces_nsa_v{v + 1}'] = (
+                f'CES NSA ({vintage_labels[v]})', g_nsa_v[obs_v_nsa]
+            )
+
+    sources["obs_qcew"] = ("QCEW", data["g_qcew"][data["qcew_obs"]])
+    for pp in data["pp_data"]:
+        name = pp["config"].name.lower()
+        sources[f"obs_{name}"] = (pp["name"], pp["g_pp"][pp["pp_obs"]])
+    return sources
+
+
+def _load_cyclical_indicators(dates: list, T: int) -> dict:
+    """Load cyclical indicator CSVs, align to model dates, and centre.
+
+    Returns a dict with keys like ``'claims_c'``, ``'nfci_c'``,
+    ``'biz_apps_c'`` mapping to centred numpy arrays of length *T*.
+    Missing files are gracefully skipped (value set to ``None``).
+    """
+    result: dict = {}
+
+    for spec in CYCLICAL_INDICATORS:
+        key = f"{spec['name']}_c"
+        fpath = DATA_DIR / spec['file']
+
+        if not fpath.exists():
+            result[key] = None
+            continue
+
+        try:
+            raw = pl.read_csv(str(fpath), try_parse_dates=True).sort('ref_date')
+        except Exception:
+            result[key] = None
+            continue
+
+        col = spec['col']
+        if col not in raw.columns:
+            result[key] = None
+            continue
+
+        if spec['freq'] == 'weekly':
+            raw = raw.with_columns(
+                pl.col('ref_date').dt.truncate('1mo').alias('month')
+            )
+            monthly = raw.group_by('month').agg(
+                pl.col(col).mean().alias(col)
+            ).sort('month').rename({'month': 'ref_date'})
+        else:
+            monthly = raw.select(['ref_date', col])
+
+        cal = pl.DataFrame({'ref_date': dates})
+        joined = cal.join(monthly, on='ref_date', how='left')
+        arr = joined[col].to_numpy().astype(float)
+
+        if np.any(np.isfinite(arr)):
+            mean_val = float(np.nanmean(arr))
+            arr_c = np.where(np.isfinite(arr), arr - mean_val, 0.0)
+            result[key] = arr_c
+        else:
+            result[key] = None
+
+    return result
 
 
 def _build_levels_from_growth(
