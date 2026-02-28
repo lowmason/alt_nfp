@@ -24,7 +24,7 @@ from alt_nfp.lookups.publication_dates import (
     BLS_SCHEDULE_URLS,
     CES_RELEASE_DATES,
     QCEW_RELEASE_DATES,
-    SAE_RELEASE_DATES,
+    # SAE_RELEASE_DATES,
 )
 
 
@@ -171,25 +171,25 @@ def main() -> None:
         print('    # (no new entries)')
     print()
 
-    # -- SAE --
-    print(f'# SAE -- fetched {today}')
-    print('# New entries not in publication_dates.py:')
-    html = _fetch_schedule(BLS_SCHEDULE_URLS['sae'])
-    parser = _TableParser()
-    parser.feed(html)
-    new_sae = 0
-    for row in parser.rows:
-        if len(row) < 2:
-            continue
-        ref = _parse_ref_month(row[0])
-        pub = _parse_release_date(row[1])
-        if ref and pub and ref not in SAE_RELEASE_DATES:
-            print(f'    date({ref.year}, {ref.month}, 1): '
-                  f'date({pub.year}, {pub.month}, {pub.day}),')
-            new_sae += 1
-    if new_sae == 0:
-        print('    # (no new entries)')
-    print()
+    # # -- SAE -- (disabled)
+    # print(f'# SAE -- fetched {today}')
+    # print('# New entries not in publication_dates.py:')
+    # html = _fetch_schedule(BLS_SCHEDULE_URLS['sae'])
+    # parser = _TableParser()
+    # parser.feed(html)
+    # new_sae = 0
+    # for row in parser.rows:
+    #     if len(row) < 2:
+    #         continue
+    #     ref = _parse_ref_month(row[0])
+    #     pub = _parse_release_date(row[1])
+    #     if ref and pub and ref not in SAE_RELEASE_DATES:
+    #         print(f'    date({ref.year}, {ref.month}, 1): '
+    #               f'date({pub.year}, {pub.month}, {pub.day}),')
+    #         new_sae += 1
+    # if new_sae == 0:
+    #     print('    # (no new entries)')
+    # print()
 
     # -- QCEW --
     print(f'# QCEW -- fetched {today}')

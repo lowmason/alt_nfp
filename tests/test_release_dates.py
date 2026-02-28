@@ -15,7 +15,7 @@ from alt_nfp.ingest.release_dates.parser import (
 )
 from alt_nfp.ingest.release_dates.vintage_dates import (
     CES_MONTHLY_REVISIONS,
-    SAE_MONTHLY_REVISIONS,
+    # SAE_MONTHLY_REVISIONS,
     build_vintage_dates,
 )
 
@@ -23,12 +23,12 @@ from alt_nfp.ingest.release_dates.vintage_dates import (
 class TestPublications:
     """Tests for publication config."""
 
-    def test_three_publications(self):
-        assert len(PUBLICATIONS) == 3
+    def test_two_publications(self):
+        assert len(PUBLICATIONS) == 2
 
     def test_publication_names(self):
         names = {p.name for p in PUBLICATIONS}
-        assert names == {'ces', 'sae', 'qcew'}
+        assert names == {'ces', 'qcew'}
 
     def test_ces_is_monthly(self):
         ces = next(p for p in PUBLICATIONS if p.name == 'ces')
@@ -92,14 +92,12 @@ class TestBuildVintageDates:
             ('ces', date(2020, 4, 12), date(2020, 5, 8)),
             # CES Jan 2021: triggers benchmark for all 2020 months
             ('ces', date(2021, 1, 12), date(2021, 2, 5)),
-            # SAE: monthly releases
-            ('sae', date(2020, 1, 12), date(2020, 3, 14)),
-            ('sae', date(2020, 2, 12), date(2020, 3, 25)),
-            ('sae', date(2020, 3, 12), date(2020, 4, 17)),
-            # SAE March 2021: triggers first benchmark for 2020
-            ('sae', date(2021, 3, 12), date(2021, 4, 16)),
-            # SAE March 2022: triggers second benchmark for 2020
-            ('sae', date(2022, 3, 12), date(2022, 4, 15)),
+            # SAE release dates kept in fixture but SAE processing is disabled
+            # ('sae', date(2020, 1, 12), date(2020, 3, 14)),
+            # ('sae', date(2020, 2, 12), date(2020, 3, 25)),
+            # ('sae', date(2020, 3, 12), date(2020, 4, 17)),
+            # ('sae', date(2021, 3, 12), date(2021, 4, 16)),
+            # ('sae', date(2022, 3, 12), date(2022, 4, 15)),
             # QCEW: quarterly releases
             ('qcew', date(2020, 3, 12), date(2020, 8, 19)),   # Q1
             ('qcew', date(2020, 6, 12), date(2020, 11, 25)),  # Q2
@@ -132,12 +130,12 @@ class TestBuildVintageDates:
         for rev in CES_MONTHLY_REVISIONS:
             assert rev in revisions, f'CES revision {rev} missing'
 
-    def test_sae_revisions_present(self, release_dates_path: Path):
-        result = build_vintage_dates(release_dates_path)
-        sae = result.filter(pl.col('publication') == 'sae')
-        revisions = sae['revision'].unique().sort().to_list()
-        for rev in SAE_MONTHLY_REVISIONS:
-            assert rev in revisions, f'SAE revision {rev} missing'
+    # def test_sae_revisions_present(self, release_dates_path: Path):
+    #     result = build_vintage_dates(release_dates_path)
+    #     sae = result.filter(pl.col('publication') == 'sae')
+    #     revisions = sae['revision'].unique().sort().to_list()
+    #     for rev in SAE_MONTHLY_REVISIONS:
+    #         assert rev in revisions, f'SAE revision {rev} missing'
 
     def test_qcew_q1_max_revision_is_4(self, release_dates_path: Path):
         result = build_vintage_dates(release_dates_path)
@@ -170,15 +168,15 @@ class TestBuildVintageDates:
         assert date(2020, 1, 12) in bench_refs
         assert date(2020, 4, 12) in bench_refs
 
-    def test_sae_two_benchmark_generations(self, release_dates_path: Path):
-        result = build_vintage_dates(release_dates_path)
-        sae_bench = result.filter(
-            (pl.col('publication') == 'sae')
-            & (pl.col('benchmark_revision') > 0)
-        )
-        bench_revs = sae_bench['benchmark_revision'].unique().sort().to_list()
-        assert 1 in bench_revs
-        assert 2 in bench_revs
+    # def test_sae_two_benchmark_generations(self, release_dates_path: Path):
+    #     result = build_vintage_dates(release_dates_path)
+    #     sae_bench = result.filter(
+    #         (pl.col('publication') == 'sae')
+    #         & (pl.col('benchmark_revision') > 0)
+    #     )
+    #     bench_revs = sae_bench['benchmark_revision'].unique().sort().to_list()
+    #     assert 1 in bench_revs
+    #     assert 2 in bench_revs
 
     def test_vintage_date_not_future(self, release_dates_path: Path):
         result = build_vintage_dates(release_dates_path)

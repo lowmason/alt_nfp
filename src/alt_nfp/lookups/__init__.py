@@ -39,7 +39,7 @@ from .revision_schedules import (
     get_default_calendar,
     get_noise_multiplier,
     get_qcew_vintage_date,
-    get_sae_vintage_date,
+    # get_sae_vintage_date,
 )
 
 __all__ = [
@@ -73,7 +73,7 @@ __all__ = [
     'get_supersector_components',
     'qcew_to_sector',
     'get_qcew_vintage_date',
-    'get_sae_vintage_date',
+    # 'get_sae_vintage_date',
     'sector_to_supersector_idx',
     'supersector_to_domain_idx',
 ]

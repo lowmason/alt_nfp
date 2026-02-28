@@ -21,7 +21,7 @@ import polars as pl
 from alt_nfp.ingest.release_dates.config import RELEASE_DATES_PATH, VINTAGE_DATES_PATH
 
 CES_MONTHLY_REVISIONS = [0, 1, 2]
-SAE_MONTHLY_REVISIONS = [0, 1]
+# SAE_MONTHLY_REVISIONS = [0, 1]
 
 # Years covered by the BLS archive scrape.  Ref_dates before this are filled
 # with first-Friday estimates via _generate_ces_pre_scrape_dates().
@@ -32,24 +32,24 @@ CES_OCT_2025_RELEASED_WITH_NOV_REF = date(2025, 10, 12)
 CES_NOV_2025_REF = date(2025, 11, 12)
 CES_OCT_2025_VINTAGE_FALLBACK = date(2025, 12, 16)
 
-# SAE Sept 2013: released with Oct 2013 (Oct 2013 government shutdown).
-SAE_SEPT_2013_RELEASED_WITH_OCT_REF = date(2013, 9, 12)
-SAE_OCT_2013_REF = date(2013, 10, 12)
-SAE_SEPT_2013_VINTAGE_FALLBACK = date(2013, 11, 22)
-
-# SAE Oct 2025: released with Nov 2025 (government shutdown).
-SAE_OCT_2025_RELEASED_WITH_NOV_REF = date(2025, 10, 12)
-SAE_NOV_2025_REF = date(2025, 11, 12)
-SAE_OCT_2025_VINTAGE_FALLBACK = date(2025, 12, 16)
+# # SAE Sept 2013: released with Oct 2013 (Oct 2013 government shutdown).
+# SAE_SEPT_2013_RELEASED_WITH_OCT_REF = date(2013, 9, 12)
+# SAE_OCT_2013_REF = date(2013, 10, 12)
+# SAE_SEPT_2013_VINTAGE_FALLBACK = date(2013, 11, 22)
+#
+# # SAE Oct 2025: released with Nov 2025 (government shutdown).
+# SAE_OCT_2025_RELEASED_WITH_NOV_REF = date(2025, 10, 12)
+# SAE_NOV_2025_REF = date(2025, 11, 12)
+# SAE_OCT_2025_VINTAGE_FALLBACK = date(2025, 12, 16)
 
 # Supplemental release dates for ref_dates missing from the scrape (early 2010).
 SUPPLEMENTAL_RELEASE_DATES = [
     ('ces', date(2010, 1, 12), date(2010, 2, 5)),
     ('ces', date(2010, 2, 12), date(2010, 3, 5)),
     ('ces', date(2010, 3, 12), date(2010, 4, 2)),
-    ('sae', date(2010, 1, 12), date(2010, 3, 14)),
-    ('sae', date(2010, 2, 12), date(2010, 3, 25)),
-    ('sae', date(2010, 3, 12), date(2010, 4, 15)),
+    # ('sae', date(2010, 1, 12), date(2010, 3, 14)),
+    # ('sae', date(2010, 2, 12), date(2010, 3, 25)),
+    # ('sae', date(2010, 3, 12), date(2010, 4, 15)),
 ]
 
 # US federal holidays that can land on the first Friday of a month.
@@ -122,26 +122,26 @@ def _add_ces_revisions(df: pl.DataFrame) -> pl.DataFrame:
     return pl.concat(parts)
 
 
-def _add_sae_revisions(df: pl.DataFrame) -> pl.DataFrame:
-    """Expand SAE release_dates into revision rows (0, 1)."""
-    parts = []
-    for n in SAE_MONTHLY_REVISIONS:
-        if n == 0:
-            parts.append(
-                df.filter(pl.col('publication') == 'sae').with_columns(
-                    pl.lit(0).alias('revision'),
-                    pl.lit(0).alias('benchmark_revision'),
-                )
-            )
-        else:
-            parts.append(
-                df.filter(pl.col('publication') == 'sae').with_columns(
-                    pl.col('vintage_date').dt.offset_by(f'{n}mo').alias('vintage_date'),
-                    pl.lit(n).alias('revision'),
-                    pl.lit(0).alias('benchmark_revision'),
-                )
-            )
-    return pl.concat(parts)
+# def _add_sae_revisions(df: pl.DataFrame) -> pl.DataFrame:
+#     """Expand SAE release_dates into revision rows (0, 1)."""
+#     parts = []
+#     for n in SAE_MONTHLY_REVISIONS:
+#         if n == 0:
+#             parts.append(
+#                 df.filter(pl.col('publication') == 'sae').with_columns(
+#                     pl.lit(0).alias('revision'),
+#                     pl.lit(0).alias('benchmark_revision'),
+#                 )
+#             )
+#         else:
+#             parts.append(
+#                 df.filter(pl.col('publication') == 'sae').with_columns(
+#                     pl.col('vintage_date').dt.offset_by(f'{n}mo').alias('vintage_date'),
+#                     pl.lit(n).alias('revision'),
+#                     pl.lit(0).alias('benchmark_revision'),
+#                 )
+#             )
+#     return pl.concat(parts)
 
 
 def _add_qcew_revisions(df: pl.DataFrame) -> pl.DataFrame:
@@ -205,45 +205,45 @@ def _ces_benchmark_vintage_dates(release_df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _sae_benchmark_vintage_dates(release_df: pl.DataFrame) -> pl.DataFrame:
-    """Two benchmarks per ref_date (revision=1, benchmark_revision=1 or 2)."""
-    sae = release_df.filter(pl.col('publication') == 'sae')
-    march_releases = sae.filter(pl.col('ref_date').dt.month() == 3).select(
-        pl.col('ref_date').dt.year().alias('year'),
-        pl.col('vintage_date').alias('benchmark_vintage'),
-    )
-    sae_refs = sae.select('publication', 'ref_date').unique().with_columns(
-        pl.col('ref_date').dt.year().alias('ref_year'),
-    )
-    first = sae_refs.with_columns(
-        (pl.col('ref_year') + 1).alias('benchmark_year'),
-    ).join(
-        march_releases,
-        left_on='benchmark_year',
-        right_on='year',
-        how='inner',
-    ).select(
-        pl.col('publication'),
-        pl.col('ref_date'),
-        pl.col('benchmark_vintage').alias('vintage_date'),
-        pl.lit(max(SAE_MONTHLY_REVISIONS)).alias('revision'),
-        pl.lit(1).alias('benchmark_revision'),
-    )
-    second = sae_refs.with_columns(
-        (pl.col('ref_year') + 2).alias('benchmark_year'),
-    ).join(
-        march_releases,
-        left_on='benchmark_year',
-        right_on='year',
-        how='inner',
-    ).select(
-        pl.col('publication'),
-        pl.col('ref_date'),
-        pl.col('benchmark_vintage').alias('vintage_date'),
-        pl.lit(max(SAE_MONTHLY_REVISIONS)).alias('revision'),
-        pl.lit(2).alias('benchmark_revision'),
-    )
-    return pl.concat([first, second])
+# def _sae_benchmark_vintage_dates(release_df: pl.DataFrame) -> pl.DataFrame:
+#     """Two benchmarks per ref_date (revision=1, benchmark_revision=1 or 2)."""
+#     sae = release_df.filter(pl.col('publication') == 'sae')
+#     march_releases = sae.filter(pl.col('ref_date').dt.month() == 3).select(
+#         pl.col('ref_date').dt.year().alias('year'),
+#         pl.col('vintage_date').alias('benchmark_vintage'),
+#     )
+#     sae_refs = sae.select('publication', 'ref_date').unique().with_columns(
+#         pl.col('ref_date').dt.year().alias('ref_year'),
+#     )
+#     first = sae_refs.with_columns(
+#         (pl.col('ref_year') + 1).alias('benchmark_year'),
+#     ).join(
+#         march_releases,
+#         left_on='benchmark_year',
+#         right_on='year',
+#         how='inner',
+#     ).select(
+#         pl.col('publication'),
+#         pl.col('ref_date'),
+#         pl.col('benchmark_vintage').alias('vintage_date'),
+#         pl.lit(max(SAE_MONTHLY_REVISIONS)).alias('revision'),
+#         pl.lit(1).alias('benchmark_revision'),
+#     )
+#     second = sae_refs.with_columns(
+#         (pl.col('ref_year') + 2).alias('benchmark_year'),
+#     ).join(
+#         march_releases,
+#         left_on='benchmark_year',
+#         right_on='year',
+#         how='inner',
+#     ).select(
+#         pl.col('publication'),
+#         pl.col('ref_date'),
+#         pl.col('benchmark_vintage').alias('vintage_date'),
+#         pl.lit(max(SAE_MONTHLY_REVISIONS)).alias('revision'),
+#         pl.lit(2).alias('benchmark_revision'),
+#     )
+#     return pl.concat([first, second])
 
 
 def _apply_shutdown_override(
@@ -320,26 +320,26 @@ def build_vintage_dates(release_dates_path: Path | None = None) -> pl.DataFrame:
         df, 'ces', CES_OCT_2025_RELEASED_WITH_NOV_REF,
         CES_NOV_2025_REF, CES_OCT_2025_VINTAGE_FALLBACK,
     )
-    df = _apply_shutdown_override(
-        df, 'sae', SAE_SEPT_2013_RELEASED_WITH_OCT_REF,
-        SAE_OCT_2013_REF, SAE_SEPT_2013_VINTAGE_FALLBACK,
-    )
-    df = _apply_shutdown_override(
-        df, 'sae', SAE_OCT_2025_RELEASED_WITH_NOV_REF,
-        SAE_NOV_2025_REF, SAE_OCT_2025_VINTAGE_FALLBACK,
-    )
+    # df = _apply_shutdown_override(
+    #     df, 'sae', SAE_SEPT_2013_RELEASED_WITH_OCT_REF,
+    #     SAE_OCT_2013_REF, SAE_SEPT_2013_VINTAGE_FALLBACK,
+    # )
+    # df = _apply_shutdown_override(
+    #     df, 'sae', SAE_OCT_2025_RELEASED_WITH_NOV_REF,
+    #     SAE_NOV_2025_REF, SAE_OCT_2025_VINTAGE_FALLBACK,
+    # )
 
     # Build revision rows for each publication
     with_revisions = pl.concat([
         _add_ces_revisions(df),
-        _add_sae_revisions(df),
+        # _add_sae_revisions(df),
         _add_qcew_revisions(df),
     ])
 
     # Build benchmark rows
     ces_bench = _ces_benchmark_vintage_dates(df)
-    sae_bench = _sae_benchmark_vintage_dates(df)
-    benchmark_rows = pl.concat([ces_bench, sae_bench])
+    # sae_bench = _sae_benchmark_vintage_dates(df)
+    benchmark_rows = ces_bench  # pl.concat([ces_bench, sae_bench])
 
     out = (
         pl.concat([with_revisions, benchmark_rows])

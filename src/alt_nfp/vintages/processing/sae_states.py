@@ -21,11 +21,11 @@ from pathlib import Path
 import httpx
 import polars as pl
 
-from alt_nfp.config import DATA_DIR
+from alt_nfp.config import INTERMEDIATE_DIR
 from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
 
-OUTPUT_PATH = DATA_DIR / 'raw' / 'sae_revisions.parquet'
-CHECKPOINT_PATH = DATA_DIR / 'raw' / 'sae_checkpoint.parquet'
+OUTPUT_PATH = INTERMEDIATE_DIR / 'sae_revisions.parquet'
+CHECKPOINT_PATH = INTERMEDIATE_DIR / 'sae_checkpoint.parquet'
 
 FRED_BASE = 'https://api.stlouisfed.org/fred'
 

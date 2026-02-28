@@ -14,7 +14,7 @@ from pathlib import Path
 
 import polars as pl
 
-from ..config import DATA_DIR, PROVIDERS, ProviderConfig
+from ..config import PROVIDERS, STORE_DIR, ProviderConfig
 from .base import PANEL_SCHEMA, validate_panel
 from .payroll import ingest_provider
 from .vintage_store import read_vintage_store, transform_to_panel
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_panel(
-    raw_dir: Path | None = None,
+    store_path: Path | None = None,
     providers: list[ProviderConfig] | None = None,
     start_year: int = 2003,
     end_year: int | None = None,
@@ -32,9 +32,9 @@ def build_panel(
 
     Parameters
     ----------
-    raw_dir : Path, optional
-        Directory containing raw data files (vintages, providers).
-        Defaults to ``DATA_DIR / 'raw'``.
+    store_path : Path, optional
+        Root of the Hive-partitioned vintage store.
+        Defaults to ``STORE_DIR``.
     providers : list[ProviderConfig], optional
         Provider list. Defaults to PROVIDERS from config.
     start_year : int
@@ -51,11 +51,10 @@ def build_panel(
         providers = PROVIDERS
     if end_year is None:
         end_year = date.today().year
-    if raw_dir is None:
-        raw_dir = DATA_DIR / 'raw'
+    if store_path is None:
+        store_path = STORE_DIR
 
     parts: list[pl.DataFrame] = []
-    store_path = raw_dir / 'vintages' / 'vintage_store'
     start_ref = date(start_year, 1, 12)
     end_ref = date(end_year, 12, 12)
 
@@ -69,10 +68,9 @@ def build_panel(
             parts.append(vintage_df)
             logger.info('Panel built from vintage store (%d rows)', len(vintage_df))
 
-    provider_dir = raw_dir / 'providers' if raw_dir.exists() else None
     for cfg in providers:
         try:
-            pp_df = ingest_provider(cfg, raw_dir=provider_dir)
+            pp_df = ingest_provider(cfg)
             if len(pp_df) > 0:
                 parts.append(pp_df)
         except Exception as e:

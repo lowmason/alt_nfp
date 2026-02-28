@@ -2,7 +2,8 @@
 
 This module is the single source of truth for:
 
-* **File-system paths** — ``BASE_DIR``, ``DATA_DIR``, ``OUTPUT_DIR``.
+* **File-system paths** — ``BASE_DIR``, ``DATA_DIR``, ``STORE_DIR``,
+  ``DOWNLOADS_DIR``, ``INTERMEDIATE_DIR``, ``OUTPUT_DIR``.
 * **Model hyper-parameters** — QCEW noise floors, BD lag, Fourier harmonic
   count, cyclical indicator specs.
 * **Provider registry** — the :data:`PROVIDERS` list of
@@ -24,6 +25,9 @@ from typing import Literal
 
 BASE_DIR = Path(__file__).resolve().parents[2]  # repo root (alt_nfp/)
 DATA_DIR = BASE_DIR / "data"
+STORE_DIR = DATA_DIR / "store"
+DOWNLOADS_DIR = DATA_DIR / "downloads"
+INTERMEDIATE_DIR = DATA_DIR / "intermediate"
 OUTPUT_DIR = BASE_DIR / "output"
 
 # ---------------------------------------------------------------------------
@@ -85,7 +89,7 @@ class ProviderConfig:
     name : str
         Display name (e.g. ``'G'``).
     file : str
-        Path relative to ``DATA_DIR`` (e.g. ``'raw/providers/G/g_provider.parquet'``).
+        Path relative to ``DATA_DIR`` (e.g. ``'providers/G/g_provider.parquet'``).
     error_model : ``'iid'`` | ``'ar1'``
         Measurement-error structure.
     industry_type : str
@@ -114,7 +118,7 @@ class ProviderConfig:
 PROVIDERS: list[ProviderConfig] = [
     ProviderConfig(
         name="G",
-        file="raw/providers/G/g_provider.parquet",
+        file="providers/G/g_provider.parquet",
         error_model="iid",
     ),
 ]

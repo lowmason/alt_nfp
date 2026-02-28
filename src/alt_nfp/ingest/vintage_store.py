@@ -19,12 +19,12 @@ from pathlib import Path
 
 import polars as pl
 
-from ..config import DATA_DIR
+from ..config import STORE_DIR
 from .base import PANEL_SCHEMA
 
 logger = logging.getLogger(__name__)
 
-VINTAGE_STORE_PATH = DATA_DIR / "raw" / "vintages" / "vintage_store"
+VINTAGE_STORE_PATH = STORE_DIR
 
 VINTAGE_STORE_SCHEMA: dict[str, pl.DataType] = {
     "geographic_type": pl.Utf8,
@@ -72,7 +72,7 @@ def read_vintage_store(
     ----------
     store_path : Path
         Root of the Hive-partitioned parquet store.
-    source : {'ces', 'qcew', 'sae'} or None
+    source : {'ces', 'qcew'} or None
         Filter to a specific source.
     seasonally_adjusted : bool or None
         Filter by seasonal adjustment flag.
@@ -132,10 +132,10 @@ def transform_to_panel(
     Pipeline stages:
 
     1. Filter by geographic scope; drop nulls and zero employment.
-    2. Derive source tags (``ces_sa``, ``ces_nsa``, ``qcew``, ``sae_sa``,
-       ``sae_nsa``) and ``source_type``.
+    2. Derive source tags (``ces_sa``, ``ces_nsa``, ``qcew``) and
+       ``source_type``.
     3. Compute log-growth within each consistent revision group.
-    4. Map ``revision_number``: CES/SAE observations with publication lag
+    4. Map ``revision_number``: CES observations with publication lag
        > 10 months become ``-1`` (benchmark); others keep the store's
        ``revision`` value.
     5. Determine ``is_final`` flag.
@@ -210,7 +210,7 @@ def transform_to_panel(
 
     lf = lf.with_columns(
         pl.when(
-            pl.col("source").is_in(["ces", "sae"])
+            (pl.col("source") == "ces")
             & (pl.col("benchmark_revision") > 0)
         )
         .then(pl.lit(-1).cast(pl.Int32))
@@ -219,13 +219,13 @@ def transform_to_panel(
     )
 
     # --- 5. is_final ------------------------------------------------------
-    # CES/SAE: final once benchmarked.
+    # CES: final once benchmarked.
     # QCEW pre-2017: only revision-0 data exists; treat as final.
     # QCEW 2017+: final at the maximum revision for the reference quarter.
     qtr_expr = (pl.col("ref_date").dt.month() - 1) // 3 + 1
 
     lf = lf.with_columns(
-        pl.when(pl.col("source").is_in(["ces", "sae"]))
+        pl.when(pl.col("source") == "ces")
         .then(pl.col("revision_number") == -1)
         .when(
             (pl.col("source") == "qcew")
@@ -297,10 +297,10 @@ def _derive_source_tags(lf: pl.LazyFrame) -> pl.LazyFrame:
         .then(pl.lit("ces_nsa"))
         .when(pl.col("source") == "qcew")
         .then(pl.lit("qcew"))
-        .when((pl.col("source") == "sae") & pl.col("seasonally_adjusted"))
-        .then(pl.lit("sae_sa"))
-        .when((pl.col("source") == "sae") & ~pl.col("seasonally_adjusted"))
-        .then(pl.lit("sae_nsa"))
+        # .when((pl.col("source") == "sae") & pl.col("seasonally_adjusted"))
+        # .then(pl.lit("sae_sa"))
+        # .when((pl.col("source") == "sae") & ~pl.col("seasonally_adjusted"))
+        # .then(pl.lit("sae_nsa"))
         .otherwise(pl.col("source"))
         .alias("source_tag"),
         #
@@ -310,10 +310,10 @@ def _derive_source_tags(lf: pl.LazyFrame) -> pl.LazyFrame:
         .then(pl.lit("official_nsa"))
         .when(pl.col("source") == "qcew")
         .then(pl.lit("census"))
-        .when((pl.col("source") == "sae") & pl.col("seasonally_adjusted"))
-        .then(pl.lit("official_sa"))
-        .when((pl.col("source") == "sae") & ~pl.col("seasonally_adjusted"))
-        .then(pl.lit("official_nsa"))
+        # .when((pl.col("source") == "sae") & pl.col("seasonally_adjusted"))
+        # .then(pl.lit("official_sa"))
+        # .when((pl.col("source") == "sae") & ~pl.col("seasonally_adjusted"))
+        # .then(pl.lit("official_nsa"))
         .otherwise(pl.lit("other"))
         .alias("source_type"),
     )
@@ -410,7 +410,7 @@ def compact_partition(
     store_path : Path
         Root of the Hive-partitioned parquet store.
     source : str
-        Source partition key (``'ces'``, ``'qcew'``, ``'sae'``).
+        Source partition key (``'ces'``, ``'qcew'``).
     seasonally_adjusted : bool
         Seasonal adjustment partition key.
     """

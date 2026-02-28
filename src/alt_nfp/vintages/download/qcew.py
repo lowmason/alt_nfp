@@ -56,7 +56,7 @@ def download_qcew(
     client : httpx.Client or None
         Optional pre-built client. A new one is created if not provided.
     """
-    base = (data_dir or DATA_DIR) / 'raw'
+    base = (data_dir or DATA_DIR) / 'downloads'
     qcew_dir = base / 'qcew'
     qcew_dir.mkdir(parents=True, exist_ok=True)
     out_path = qcew_dir / QCEW_FILENAME
@@ -127,7 +127,7 @@ def download_qcew_bulk(
     Path
         Path to the output parquet file.
     """
-    base = (data_dir or DATA_DIR) / 'raw'
+    base = (data_dir or DATA_DIR) / 'downloads'
     qcew_dir = base / 'qcew'
     qcew_dir.mkdir(parents=True, exist_ok=True)
     out_path = qcew_dir / BULK_OUTPUT_FILENAME

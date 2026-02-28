@@ -29,7 +29,7 @@ QCEWReleaseDateMap = dict[tuple[int, int], date]
 BLS_SCHEDULE_URLS: dict[str, str] = {
     'ces': 'https://www.bls.gov/schedule/news_release/empsit.htm',
     'qcew': 'https://www.bls.gov/schedule/news_release/cew.htm',
-    'sae': 'https://www.bls.gov/schedule/news_release/laus.htm',
+    # 'sae': 'https://www.bls.gov/schedule/news_release/laus.htm',
 }
 
 LAST_SCRAPED: date = date(2026, 2, 26)
@@ -79,27 +79,25 @@ QCEW_RELEASE_DATES: QCEWReleaseDateMap = {
 # ---------------------------------------------------------------------------
 # SAE (State Employment and Unemployment) — first-print release dates
 # ---------------------------------------------------------------------------
-# All releases at 10:00 AM ET.
-# Source: https://www.bls.gov/schedule/news_release/laus.htm
-# Key: ref_month (1st of month), Value: publication date
-
-SAE_RELEASE_DATES: ReleaseDateMap = {
-    date(2024, 10, 1): date(2024, 11, 19),
-    date(2024, 11, 1): date(2024, 12, 20),
-    date(2024, 12, 1): date(2025, 1, 28),
-    date(2025, 1, 1): date(2025, 3, 17),
-    date(2025, 2, 1): date(2025, 3, 28),
-    date(2025, 3, 1): date(2025, 4, 18),
-    date(2025, 4, 1): date(2025, 5, 21),
-    date(2025, 5, 1): date(2025, 6, 24),
-    date(2025, 6, 1): date(2025, 7, 18),
-    date(2025, 7, 1): date(2025, 8, 19),
-    date(2025, 8, 1): date(2025, 9, 19),
-    # Sep 2025: released Dec 11 (gov shutdown delayed Oct release)
-    date(2025, 9, 1): date(2025, 12, 11),
-    # Oct 2025: released with Nov (gov shutdown)
-    date(2025, 10, 1): date(2025, 12, 16),
-}
+# SAE support is disabled.
+#
+# SAE_RELEASE_DATES: ReleaseDateMap = {
+#     date(2024, 10, 1): date(2024, 11, 19),
+#     date(2024, 11, 1): date(2024, 12, 20),
+#     date(2024, 12, 1): date(2025, 1, 28),
+#     date(2025, 1, 1): date(2025, 3, 17),
+#     date(2025, 2, 1): date(2025, 3, 28),
+#     date(2025, 3, 1): date(2025, 4, 18),
+#     date(2025, 4, 1): date(2025, 5, 21),
+#     date(2025, 5, 1): date(2025, 6, 24),
+#     date(2025, 6, 1): date(2025, 7, 18),
+#     date(2025, 7, 1): date(2025, 8, 19),
+#     date(2025, 8, 1): date(2025, 9, 19),
+#     # Sep 2025: released Dec 11 (gov shutdown delayed Oct release)
+#     date(2025, 9, 1): date(2025, 12, 11),
+#     # Oct 2025: released with Nov (gov shutdown)
+#     date(2025, 10, 1): date(2025, 12, 16),
+# }
 
 
 # ---------------------------------------------------------------------------
@@ -133,18 +131,18 @@ if __name__ == '__main__':
         )
     print('All QCEW dates pass the 120-day check.')
 
-    # -- SAE lags CES for overlapping months (>= for shutdown combined releases)
-    common_months = set(SAE_RELEASE_DATES.keys()) & set(CES_RELEASE_DATES.keys())
-    for ref in sorted(common_months):
-        assert SAE_RELEASE_DATES[ref] >= CES_RELEASE_DATES[ref], (
-            f'{ref}: SAE {SAE_RELEASE_DATES[ref]} should be on or after '
-            f'CES {CES_RELEASE_DATES[ref]}'
-        )
-    print(f'SAE lags CES for all {len(common_months)} overlapping months.')
+    # -- SAE checks disabled (SAE support commented out)
+    # common_months = set(SAE_RELEASE_DATES.keys()) & set(CES_RELEASE_DATES.keys())
+    # for ref in sorted(common_months):
+    #     assert SAE_RELEASE_DATES[ref] >= CES_RELEASE_DATES[ref], (
+    #         f'{ref}: SAE {SAE_RELEASE_DATES[ref]} should be on or after '
+    #         f'CES {CES_RELEASE_DATES[ref]}'
+    #     )
+    # print(f'SAE lags CES for all {len(common_months)} overlapping months.')
 
     # -- No duplicate ref periods (dict keys are unique by definition,
     #    but verify data is not accidentally truncated)
     assert len(CES_RELEASE_DATES) == len(set(CES_RELEASE_DATES.keys()))
     assert len(QCEW_RELEASE_DATES) == len(set(QCEW_RELEASE_DATES.keys()))
-    assert len(SAE_RELEASE_DATES) == len(set(SAE_RELEASE_DATES.keys()))
+    # assert len(SAE_RELEASE_DATES) == len(set(SAE_RELEASE_DATES.keys()))
     print('No duplicate reference periods.')

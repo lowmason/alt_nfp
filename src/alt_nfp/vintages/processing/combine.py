@@ -1,18 +1,20 @@
-"""Combine CES, SAE, and QCEW revision Parquets into ``revisions.parquet``.
+"""Combine CES and QCEW revision Parquets into ``revisions.parquet``.
 
-Reads the three source-specific files, vertically concatenates them, and adds
+Reads the source-specific files, vertically concatenates them, and adds
 region- and division-level aggregates by summing state employment within each
 geographic grouping.
+
+Note: SAE support is commented out.
 """
 
 from __future__ import annotations
 
 import polars as pl
 
-from alt_nfp.config import DATA_DIR
+from alt_nfp.config import INTERMEDIATE_DIR
 from alt_nfp.lookups.geography import FIPS_TO_DIVISION, FIPS_TO_REGION
 
-OUTPUT_PATH = DATA_DIR / 'raw' / 'revisions.parquet'
+OUTPUT_PATH = INTERMEDIATE_DIR / 'revisions.parquet'
 
 GROUP_COLS = [
     'source',
@@ -29,7 +31,7 @@ GROUP_COLS = [
 
 
 def build_revisions(*, save: bool = True) -> pl.DataFrame:
-    """Combine QCEW, CES, and SAE revisions and aggregate to region/division.
+    """Combine QCEW and CES revisions and aggregate to region/division.
 
     Parameters
     ----------
@@ -42,15 +44,14 @@ def build_revisions(*, save: bool = True) -> pl.DataFrame:
         The combined revisions dataset with national, state, region, and
         division geographic levels.
     """
-    raw_dir = DATA_DIR / 'raw'
-    qcew = pl.read_parquet(raw_dir / 'qcew_revisions.parquet')
-    ces = pl.read_parquet(raw_dir / 'ces_revisions.parquet').with_columns(
+    qcew = pl.read_parquet(INTERMEDIATE_DIR / 'qcew_revisions.parquet')
+    ces = pl.read_parquet(INTERMEDIATE_DIR / 'ces_revisions.parquet').with_columns(
         revision=pl.col('revision').cast(pl.UInt8),
         benchmark_revision=pl.col('benchmark_revision').cast(pl.UInt8),
     )
-    sae = pl.read_parquet(raw_dir / 'sae_revisions.parquet')
+    # sae = pl.read_parquet(INTERMEDIATE_DIR / 'sae_revisions.parquet')
 
-    revisions_all = pl.concat([qcew, ces, sae])
+    revisions_all = pl.concat([qcew, ces])  # sae removed
 
     revisions_national = revisions_all.filter(
         pl.col('geographic_type').eq('national'),

@@ -1,6 +1,5 @@
 # Project-specific exclusions
 data/
-data/panels/*.parquet
 *.nc
 
 # Python

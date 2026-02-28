@@ -2,7 +2,7 @@
 
 Scrapes the CES vintage-data page for ``cesvinall.zip`` and individual
 ``cesvin*.xlsx`` workbooks. The zip is extracted into
-``DATA_DIR / 'raw' / 'ces' / 'cesvinall'``.
+``DATA_DIR / 'downloads' / 'ces' / 'cesvinall'``.
 """
 
 from __future__ import annotations
@@ -57,8 +57,8 @@ def download_ces(
 ) -> None:
     """Scrape the CES vintage-data page and download all linked files.
 
-    Downloads ``cesvinall.zip`` (extracted into ``{data_dir}/raw/ces/cesvinall/``)
-    and individual ``cesvin*.xlsx`` workbooks into ``{data_dir}/raw/ces/``.
+    Downloads ``cesvinall.zip`` (extracted into ``{data_dir}/downloads/ces/cesvinall/``)
+    and individual ``cesvin*.xlsx`` workbooks into ``{data_dir}/downloads/ces/``.
 
     Parameters
     ----------
@@ -67,7 +67,7 @@ def download_ces(
     client : httpx.Client or None
         Optional pre-built client. A new one is created if not provided.
     """
-    base = (data_dir or DATA_DIR) / 'raw'
+    base = (data_dir or DATA_DIR) / 'downloads'
     ces_dir = base / 'ces'
     ces_dir.mkdir(parents=True, exist_ok=True)
 

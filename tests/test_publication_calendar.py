@@ -14,19 +14,19 @@ from alt_nfp.lookups.revision_schedules import (
     get_ces_vintage_date,
     get_default_calendar,
     get_qcew_vintage_date,
-    get_sae_vintage_date,
+    # get_sae_vintage_date,
 )
 
 
 class TestFromDicts:
     """Tests for PublicationCalendar.from_dicts()."""
 
-    def test_from_dicts_builds_all_three_sources(self):
-        """CES, QCEW, SAE DataFrames are all non-empty."""
+    def test_from_dicts_builds_ces_and_qcew(self):
+        """CES and QCEW DataFrames are non-empty (SAE disabled)."""
         cal = PublicationCalendar.from_dicts()
         assert cal.ces_release_dates.height > 0
         assert cal.qcew_release_dates.height > 0
-        assert cal.sae_release_dates.height > 0
+        # assert cal.sae_release_dates.height > 0
 
     def test_ces_revision_chain(self):
         """For Feb 2025, revision 0 < revision 1 < revision 2."""
@@ -92,13 +92,13 @@ class TestVintageDateWiring:
             pl.col('pub_date').alias('publication_date'),
         ).select('source', 'ref_period', 'revision_number', 'publication_date')
 
-        sae_rows = cal.sae_release_dates.with_columns(
-            pl.lit('sae').alias('source'),
-            pl.col('ref_month').dt.strftime('%Y-%m').alias('ref_period'),
-            pl.col('pub_date').alias('publication_date'),
-        ).select('source', 'ref_period', 'revision_number', 'publication_date')
+        # sae_rows = cal.sae_release_dates.with_columns(
+        #     pl.lit('sae').alias('source'),
+        #     pl.col('ref_month').dt.strftime('%Y-%m').alias('ref_period'),
+        #     pl.col('pub_date').alias('publication_date'),
+        # ).select('source', 'ref_period', 'revision_number', 'publication_date')
 
-        combined = pl.concat([ces_rows, qcew_rows, sae_rows])
+        combined = pl.concat([ces_rows, qcew_rows])
         parquet_path = tmp_path / 'publication_calendar.parquet'
         combined.write_parquet(parquet_path)
 
@@ -106,4 +106,4 @@ class TestVintageDateWiring:
         cal2 = PublicationCalendar.from_parquet(parquet_path)
         assert cal2.ces_release_dates.height == cal.ces_release_dates.height
         assert cal2.qcew_release_dates.height == cal.qcew_release_dates.height
-        assert cal2.sae_release_dates.height == cal.sae_release_dates.height
+        # assert cal2.sae_release_dates.height == cal.sae_release_dates.height

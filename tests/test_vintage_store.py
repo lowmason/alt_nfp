@@ -176,8 +176,8 @@ class TestDeriveSourceTags:
             ("ces", False, "ces_nsa", "official_nsa"),
             ("qcew", False, "qcew", "census"),
             ("qcew", True, "qcew", "census"),
-            ("sae", True, "sae_sa", "official_sa"),
-            ("sae", False, "sae_nsa", "official_nsa"),
+            # ("sae", True, "sae_sa", "official_sa"),
+            # ("sae", False, "sae_nsa", "official_nsa"),
         ],
     )
     def test_source_tag_mapping(self, source, sa, expected_tag, expected_type):
@@ -466,16 +466,16 @@ class TestTransformToPanel:
         resorted = panel.sort("period", "source", "industry_code", "revision_number")
         assert panel.equals(resorted)
 
-    def test_sae_benchmark_revision(self, tmp_path):
-        """SAE with benchmark_revision > 0 → revision_number = -1."""
-        rows = _make_vintage_rows(
-            n_months=3, source="sae", sa=True, benchmark_revision=2
-        )
-        df = pl.DataFrame(rows, schema=VINTAGE_STORE_SCHEMA)
-        _write_hive_store(df, tmp_path)
-
-        panel = transform_to_panel(read_vintage_store(tmp_path))
-        assert all(r == -1 for r in panel["revision_number"].to_list())
+    # def test_sae_benchmark_revision(self, tmp_path):
+    #     """SAE with benchmark_revision > 0 → revision_number = -1."""
+    #     rows = _make_vintage_rows(
+    #         n_months=3, source="sae", sa=True, benchmark_revision=2
+    #     )
+    #     df = pl.DataFrame(rows, schema=VINTAGE_STORE_SCHEMA)
+    #     _write_hive_store(df, tmp_path)
+    #
+    #     panel = transform_to_panel(read_vintage_store(tmp_path))
+    #     assert all(r == -1 for r in panel["revision_number"].to_list())
 
     def test_multi_source_panel(self, tmp_path):
         """Multiple sources combine correctly into a single panel."""

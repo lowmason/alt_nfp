@@ -5,7 +5,7 @@ Usage::
     python -m alt_nfp.vintages              # Run all steps
     python -m alt_nfp.vintages release      # Scrape release dates
     python -m alt_nfp.vintages download     # Download CES + QCEW revision files
-    python -m alt_nfp.vintages process      # Process CES, SAE, QCEW revisions
+    python -m alt_nfp.vintages process      # Process CES, QCEW revisions
     python -m alt_nfp.vintages releases     # Fetch current BLS estimates
     python -m alt_nfp.vintages build        # Combine + build vintage_store
 """
@@ -114,16 +114,16 @@ def cmd_download() -> None:
 
 
 def cmd_process() -> None:
-    """Run all processing steps: CES national, SAE states, QCEW, combine."""
+    """Run all processing steps: CES national, QCEW, combine."""
     from alt_nfp.vintages.processing.ces_national import main as ces_national_main
     from alt_nfp.vintages.processing.combine import main as combine_main
     from alt_nfp.vintages.processing.qcew import main as qcew_main
-    from alt_nfp.vintages.processing.sae_states import main as sae_states_main
+    # from alt_nfp.vintages.processing.sae_states import main as sae_states_main
 
     print('=== Processing CES national revisions ===')
     ces_national_main()
-    print('\n=== Processing SAE state revisions ===')
-    sae_states_main()
+    # print('\n=== Processing SAE state revisions ===')
+    # sae_states_main()
     print('\n=== Processing QCEW revisions ===')
     qcew_main()
     print('\n=== Combining revisions ===')

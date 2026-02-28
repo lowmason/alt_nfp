@@ -16,10 +16,10 @@ from pathlib import Path
 
 import polars as pl
 
-from alt_nfp.config import DATA_DIR
+from alt_nfp.config import DATA_DIR, INTERMEDIATE_DIR
 from alt_nfp.ingest.vintage_store import VINTAGE_STORE_PATH
 
-REVISIONS_PATH = DATA_DIR / 'raw' / 'revisions.parquet'
+REVISIONS_PATH = INTERMEDIATE_DIR / 'revisions.parquet'
 RELEASES_PATH = DATA_DIR / 'releases.parquet'
 
 
@@ -33,7 +33,7 @@ def build_store(
     Parameters
     ----------
     revisions_path : Path or None
-        Path to ``revisions.parquet``. Defaults to ``DATA_DIR/raw/revisions.parquet``.
+        Path to ``revisions.parquet``. Defaults to ``INTERMEDIATE_DIR/revisions.parquet``.
     releases_path : Path or None
         Path to ``releases.parquet`` (from ``bls-estimates``).
         Defaults to ``DATA_DIR/releases.parquet``.

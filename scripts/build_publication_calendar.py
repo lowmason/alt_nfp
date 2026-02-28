@@ -9,7 +9,7 @@ Merges two sources:
 
 Output schema::
 
-    source:           Utf8   ('ces', 'qcew', 'sae')
+    source:           Utf8   ('ces', 'qcew')
     ref_period:       Utf8   ('2025-01' for monthly, '2025Q1' for quarterly)
     revision_number:  Int32  (0, 1, 2, -1 for benchmark)
     publication_date: Date
@@ -32,7 +32,7 @@ from alt_nfp.ingest.release_dates.config import RELEASE_DATES_PATH
 from alt_nfp.lookups.publication_dates import (
     CES_RELEASE_DATES,
     QCEW_RELEASE_DATES,
-    SAE_RELEASE_DATES,
+    # SAE_RELEASE_DATES,
 )
 
 log = logging.getLogger(__name__)
@@ -59,13 +59,13 @@ def _hardcoded_to_df() -> pl.DataFrame:
             'publication_date': pub,
         })
 
-    for ref, pub in SAE_RELEASE_DATES.items():
-        rows.append({
-            'source': 'sae',
-            'ref_period': ref.strftime('%Y-%m'),
-            'revision_number': 0,
-            'publication_date': pub,
-        })
+    # for ref, pub in SAE_RELEASE_DATES.items():
+    #     rows.append({
+    #         'source': 'sae',
+    #         'ref_period': ref.strftime('%Y-%m'),
+    #         'revision_number': 0,
+    #         'publication_date': pub,
+    #     })
 
     for (yr, q), pub in QCEW_RELEASE_DATES.items():
         rows.append({
@@ -103,7 +103,7 @@ def _historical_to_df() -> pl.DataFrame | None:
         ref_d: date = row['ref_date']
         vint_d: date = row['vintage_date']
 
-        if pub in ('ces', 'sae'):
+        if pub == 'ces':  # sae disabled
             ref_period = date(ref_d.year, ref_d.month, 1).strftime('%Y-%m')
         elif pub == 'qcew':
             q = (ref_d.month - 1) // 3 + 1

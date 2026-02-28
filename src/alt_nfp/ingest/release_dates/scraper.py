@@ -1,7 +1,7 @@
 """Fetch BLS archive index pages and download individual release HTMLs.
 
 Fetches index page, parses release links, downloads each release HTML to
-data/raw/releases/{pub}/.
+data/downloads/releases/{pub}/.
 """
 
 from __future__ import annotations

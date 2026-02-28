@@ -19,7 +19,16 @@ Key capabilities:
 """
 
 from .backtest import run_backtest
-from .config import BASE_DIR, DATA_DIR, OUTPUT_DIR, PROVIDERS, ProviderConfig
+from .config import (
+    BASE_DIR,
+    DATA_DIR,
+    DOWNLOADS_DIR,
+    INTERMEDIATE_DIR,
+    OUTPUT_DIR,
+    PROVIDERS,
+    STORE_DIR,
+    ProviderConfig,
+)
 from .model import build_model
 from .panel_adapter import build_obs_sources, panel_to_model_data
 from .sampling import (
@@ -52,7 +61,10 @@ from .vintages import real_time_view, final_view, vintage_diff
 __all__ = [
     "BASE_DIR",
     "DATA_DIR",
+    "DOWNLOADS_DIR",
+    "INTERMEDIATE_DIR",
     "OUTPUT_DIR",
+    "STORE_DIR",
     "PROVIDERS",
     "ProviderConfig",
     "build_obs_sources",

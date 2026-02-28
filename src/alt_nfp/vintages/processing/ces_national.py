@@ -2,7 +2,7 @@
 
 Reads every ``tri_{code}_{SA|NSA}.csv`` file from ``cesvinall/``, extracts
 the initial and revised diagonals (revisions 0, 1, 2), joins vintage dates,
-and writes the result to ``data/raw/ces_revisions.parquet``.
+and writes the result to ``data/intermediate/ces_revisions.parquet``.
 """
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ from pathlib import Path
 import polars as pl
 from polars import selectors as cs
 
-from alt_nfp.config import DATA_DIR
+from alt_nfp.config import DOWNLOADS_DIR, INTERMEDIATE_DIR
 from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
 from alt_nfp.lookups.industry import INDUSTRY_MAP
 
-CES_DIR = DATA_DIR / 'raw' / 'ces' / 'cesvinall'
-OUTPUT_PATH = DATA_DIR / 'raw' / 'ces_revisions.parquet'
+CES_DIR = DOWNLOADS_DIR / 'ces' / 'cesvinall'
+OUTPUT_PATH = INTERMEDIATE_DIR / 'ces_revisions.parquet'
 
 
 def _build_schema(path: Path) -> tuple[dict[str, pl.DataType], list[str], dict[str, str]]:

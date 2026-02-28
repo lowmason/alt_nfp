@@ -7,15 +7,15 @@ building release_dates.parquet / vintage_dates.parquet.
 from dataclasses import dataclass
 from pathlib import Path
 
-from alt_nfp.config import DATA_DIR
+from alt_nfp.config import DOWNLOADS_DIR, INTERMEDIATE_DIR
 
 BASE_URL = 'https://www.bls.gov'
 START_YEAR = 2003
 
 # Output paths
-RELEASES_DIR: Path = DATA_DIR / 'raw' / 'releases'
-RELEASE_DATES_PATH: Path = DATA_DIR / 'raw' / 'release_dates.parquet'
-VINTAGE_DATES_PATH: Path = DATA_DIR / 'raw' / 'vintage_dates.parquet'
+RELEASES_DIR: Path = DOWNLOADS_DIR / 'releases'
+RELEASE_DATES_PATH: Path = INTERMEDIATE_DIR / 'release_dates.parquet'
+VINTAGE_DATES_PATH: Path = INTERMEDIATE_DIR / 'vintage_dates.parquet'
 
 
 @dataclass(frozen=True)
@@ -35,12 +35,12 @@ PUBLICATIONS: list[Publication] = [
         index_url=f'{BASE_URL}/bls/news-release/empsit.htm',
         frequency='monthly',
     ),
-    Publication(
-        name='sae',
-        series='laus',
-        index_url=f'{BASE_URL}/bls/news-release/laus.htm',
-        frequency='monthly',
-    ),
+    # Publication(
+    #     name='sae',
+    #     series='laus',
+    #     index_url=f'{BASE_URL}/bls/news-release/laus.htm',
+    #     frequency='monthly',
+    # ),
     Publication(
         name='qcew',
         series='cewqtr',

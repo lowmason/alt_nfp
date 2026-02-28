@@ -20,7 +20,7 @@ from datetime import date
 
 import polars as pl
 
-from alt_nfp.config import DATA_DIR
+from alt_nfp.config import DOWNLOADS_DIR, INTERMEDIATE_DIR
 from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
 from alt_nfp.lookups.industry import (
     _HIERARCHY_ROWS,
@@ -30,9 +30,9 @@ from alt_nfp.lookups.industry import (
 )
 from alt_nfp.lookups.revision_schedules import get_qcew_vintage_date
 
-OUTPUT_PATH = DATA_DIR / 'raw' / 'qcew_revisions.parquet'
-QCEW_CSV_PATH = DATA_DIR / 'raw' / 'qcew' / 'qcew-revisions.csv'
-BULK_PATH = DATA_DIR / 'raw' / 'qcew' / 'qcew_bulk.parquet'
+OUTPUT_PATH = INTERMEDIATE_DIR / 'qcew_revisions.parquet'
+QCEW_CSV_PATH = DOWNLOADS_DIR / 'qcew' / 'qcew-revisions.csv'
+BULK_PATH = DOWNLOADS_DIR / 'qcew' / 'qcew_bulk.parquet'
 
 OUTPUT_COLUMNS = [
     'source', 'seasonally_adjusted',

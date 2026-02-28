@@ -346,47 +346,25 @@ def get_ces_vintage_date(
     return date(pub_year, pub_month, 1)
 
 
-def get_sae_vintage_date(
-    ref_month: date,
-    revision: int,
-    calendar: PublicationCalendar | None = None,
-) -> date:
-    """Compute the publication date for a specific SAE vintage.
-
-    When a *calendar* is provided (or the default calendar contains an
-    exact date), returns the exact date.  Otherwise falls back to a
-    lag-based approximation (revision 0 ≈ +2 months, revision 1 ≈ +3
-    months from the reference month).
-
-    Parameters
-    ----------
-    ref_month : date
-        First of the reference month.
-    revision : int
-        Revision number (0 = first print, 1 = second).
-    calendar : PublicationCalendar or None
-        If provided, prefer exact dates.  Defaults to the module-level
-        calendar built from hard-coded dates.
-
-    Returns
-    -------
-    date
-        Publication date (exact if available, approximate otherwise).
-    """
-    if calendar is None:
-        calendar = get_default_calendar()
-
-    exact = _lookup_monthly_date(calendar.sae_release_dates, ref_month, revision)
-    if exact is not None:
-        return exact
-
-    # Fall back: SAE rev 0 ~2 months, rev 1 ~3 months after ref_month
-    lag = 2 + revision
-    total_months = ref_month.month + lag
-    pub_year = ref_month.year + (total_months - 1) // 12
-    pub_month = ((total_months - 1) % 12) + 1
-
-    return date(pub_year, pub_month, 1)
+# def get_sae_vintage_date(
+#     ref_month: date,
+#     revision: int,
+#     calendar: PublicationCalendar | None = None,
+# ) -> date:
+#     """Compute the publication date for a specific SAE vintage."""
+#     if calendar is None:
+#         calendar = get_default_calendar()
+#
+#     exact = _lookup_monthly_date(calendar.sae_release_dates, ref_month, revision)
+#     if exact is not None:
+#         return exact
+#
+#     lag = 2 + revision
+#     total_months = ref_month.month + lag
+#     pub_year = ref_month.year + (total_months - 1) // 12
+#     pub_month = ((total_months - 1) % 12) + 1
+#
+#     return date(pub_year, pub_month, 1)
 
 
 def get_noise_multiplier(source: str, revision_number: int) -> float:
@@ -448,7 +426,7 @@ class PublicationCalendar:
 
     ces_release_dates: pl.DataFrame
     qcew_release_dates: pl.DataFrame
-    sae_release_dates: pl.DataFrame
+    sae_release_dates: pl.DataFrame | None = None
 
     @classmethod
     def from_parquet(cls, path: Path) -> 'PublicationCalendar':
@@ -488,18 +466,18 @@ class PublicationCalendar:
             )
         )
 
-        sae_df = (
-            df.filter(pl.col('source') == 'sae')
-            .with_columns(
-                pl.col('ref_period').str.to_date('%Y-%m').alias('ref_month'),
-            )
-            .select('ref_month', 'revision_number', pl.col('publication_date').alias('pub_date'))
-        )
+        # sae_df = (
+        #     df.filter(pl.col('source') == 'sae')
+        #     .with_columns(
+        #         pl.col('ref_period').str.to_date('%Y-%m').alias('ref_month'),
+        #     )
+        #     .select('ref_month', 'revision_number', pl.col('publication_date').alias('pub_date'))
+        # )
 
         return cls(
             ces_release_dates=ces_df,
             qcew_release_dates=qcew_df,
-            sae_release_dates=sae_df,
+            # sae_release_dates=sae_df,
         )
 
     @classmethod
@@ -519,7 +497,7 @@ class PublicationCalendar:
         from alt_nfp.lookups.publication_dates import (
             CES_RELEASE_DATES,
             QCEW_RELEASE_DATES,
-            SAE_RELEASE_DATES,
+            # SAE_RELEASE_DATES,
         )
 
         ces_rows = _build_monthly_revision_rows(CES_RELEASE_DATES, CES_REVISIONS)
@@ -528,11 +506,11 @@ class PublicationCalendar:
             schema={'ref_month': pl.Date, 'revision_number': pl.Int32, 'pub_date': pl.Date},
         )
 
-        sae_rows = _build_monthly_revision_rows(SAE_RELEASE_DATES, None)
-        sae_df = pl.DataFrame(
-            sae_rows,
-            schema={'ref_month': pl.Date, 'revision_number': pl.Int32, 'pub_date': pl.Date},
-        )
+        # sae_rows = _build_monthly_revision_rows(SAE_RELEASE_DATES, None)
+        # sae_df = pl.DataFrame(
+        #     sae_rows,
+        #     schema={'ref_month': pl.Date, 'revision_number': pl.Int32, 'pub_date': pl.Date},
+        # )
 
         qcew_rows = _build_qcew_revision_rows(QCEW_RELEASE_DATES)
         qcew_df = pl.DataFrame(
@@ -548,7 +526,7 @@ class PublicationCalendar:
         return cls(
             ces_release_dates=ces_df,
             qcew_release_dates=qcew_df,
-            sae_release_dates=sae_df,
+            # sae_release_dates=sae_df,
         )
 
 

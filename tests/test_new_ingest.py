@@ -105,9 +105,9 @@ class TestLatestVintageLookup:
 
     def test_filters_by_publication(self):
         vintage_df = pl.DataFrame({
-            'publication': ['ces', 'sae'],
+            'publication': ['ces', 'qcew'],
             'ref_date': [date(2020, 1, 12)] * 2,
-            'vintage_date': [date(2020, 2, 7), date(2020, 3, 14)],
+            'vintage_date': [date(2020, 2, 7), date(2020, 8, 19)],
             'revision': [0, 0],
             'benchmark_revision': [0, 0],
         })
