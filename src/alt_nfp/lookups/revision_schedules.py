@@ -15,6 +15,80 @@ import polars as pl
 
 
 @dataclass(frozen=True)
+class PublicationCalendar:
+    """Actual BLS publication dates for exact vintage-date lookups.
+
+    When available, ``get_qcew_vintage_date`` and ``get_ces_vintage_date``
+    prefer exact dates from these DataFrames before falling back to the
+    lag-based approximation in ``RevisionSpec``.
+    """
+
+    ces_release_dates: pl.DataFrame  # ref_month, revision_number, pub_date
+    qcew_release_dates: pl.DataFrame  # ref_quarter, ref_year, revision_number, pub_date
+
+
+_DEFAULT_CALENDAR: PublicationCalendar | None = None
+
+
+def _load_vintage_dates() -> pl.DataFrame | None:
+    """Try to load vintage_dates.parquet from the intermediate directory."""
+    try:
+        from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
+    except Exception:
+        return None
+    if not VINTAGE_DATES_PATH.exists():
+        return None
+    return pl.read_parquet(VINTAGE_DATES_PATH)
+
+
+def get_default_calendar() -> PublicationCalendar:
+    """Return the default PublicationCalendar, lazily built on first call.
+
+    Loads exact dates from ``vintage_dates.parquet`` when available.
+    Falls back to empty DataFrames (all lookups use lag approximation).
+    """
+    global _DEFAULT_CALENDAR
+    if _DEFAULT_CALENDAR is not None:
+        return _DEFAULT_CALENDAR
+
+    vdf = _load_vintage_dates()
+
+    if vdf is not None and vdf.height > 0:
+        ces_rows = (
+            vdf.filter(pl.col("publication") == "ces")
+            .rename({"ref_date": "ref_month", "vintage_date": "pub_date", "revision": "revision_number"})
+            .select("ref_month", "revision_number", "pub_date")
+        )
+        qcew_rows = (
+            vdf.filter(pl.col("publication") == "qcew")
+            .with_columns(
+                pl.col("ref_date").dt.month().map_elements(
+                    lambda m: f"Q{(m - 1) // 3 + 1}", return_dtype=pl.Utf8
+                ).alias("ref_quarter"),
+                pl.col("ref_date").dt.year().alias("ref_year"),
+            )
+            .rename({"vintage_date": "pub_date", "revision": "revision_number"})
+            .select("ref_quarter", "ref_year", "revision_number", "pub_date")
+        )
+    else:
+        ces_rows = pl.DataFrame(
+            schema={"ref_month": pl.Date, "revision_number": pl.Int32, "pub_date": pl.Date}
+        )
+        qcew_rows = pl.DataFrame(
+            schema={
+                "ref_quarter": pl.Utf8, "ref_year": pl.Int32,
+                "revision_number": pl.Int32, "pub_date": pl.Date,
+            }
+        )
+
+    _DEFAULT_CALENDAR = PublicationCalendar(
+        ces_release_dates=ces_rows,
+        qcew_release_dates=qcew_rows,
+    )
+    return _DEFAULT_CALENDAR
+
+
+@dataclass(frozen=True)
 class RevisionSpec:
     """Specification for a single revision vintage.
 
