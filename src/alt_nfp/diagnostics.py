@@ -40,9 +40,15 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
     except Exception:
         pass
 
-    # Build var_names dynamically
+    # Build var_names dynamically — era-specific or scalar latent params
+    has_era = "mu_g_era" in idata.posterior
+    if has_era:
+        latent_vars = ["mu_g_era", "phi_raw_era", "sigma_g"]
+    else:
+        latent_vars = ["mu_g", "phi", "sigma_g"]
+
     var_names = [
-        "mu_g", "phi", "sigma_g",
+        *latent_vars,
         "sigma_fourier",
         "phi_0", "phi_1", "phi_2", "sigma_bd",
         "alpha_ces", "lambda_ces", "sigma_ces_sa", "sigma_ces_nsa",
@@ -379,11 +385,13 @@ def plot_divergences(idata: az.InferenceData, data: dict) -> None:
     div_flat = diverging.flatten().astype(bool)
 
     # Build parameter pairs dynamically
+    has_era = "mu_g_era" in idata.posterior
     pairs: list[tuple[str, str, str, str]] = [
-        ("phi", "sigma_g", "\u03c6", "\u03c3_g"),
         ("lambda_ces", "alpha_ces", "\u03bb_CES", "\u03b1_CES"),
         ("phi_0", "phi_1", "\u03c6_0 (BD)", "\u03c6_1 (birth rate)"),
     ]
+    if not has_era:
+        pairs.insert(0, ("phi", "sigma_g", "\u03c6", "\u03c3_g"))
     for pp in data["pp_data"]:
         if pp["config"].error_model == "ar1":
             n = pp["config"].name.lower()

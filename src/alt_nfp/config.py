@@ -3,7 +3,7 @@
 This module is the single source of truth for:
 
 * **File-system paths** — ``BASE_DIR``, ``DATA_DIR``, ``STORE_DIR``,
-  ``DOWNLOADS_DIR``, ``INTERMEDIATE_DIR``, ``OUTPUT_DIR``.
+  ``DOWNLOADS_DIR``, ``INTERMEDIATE_DIR``, ``INDICATORS_DIR``, ``OUTPUT_DIR``.
 * **Model hyper-parameters** — QCEW noise floors, BD lag, Fourier harmonic
   count, cyclical indicator specs.
 * **Provider registry** — the :data:`PROVIDERS` list of
@@ -16,6 +16,7 @@ in :data:`PROVIDERS`.  The model, diagnostics, and plots adapt automatically.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +29,7 @@ DATA_DIR = BASE_DIR / "data"
 STORE_DIR = DATA_DIR / "store"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
 INTERMEDIATE_DIR = DATA_DIR / "intermediate"
+INDICATORS_DIR = DATA_DIR / "indicators"
 OUTPUT_DIR = BASE_DIR / "output"
 
 # ---------------------------------------------------------------------------
@@ -44,23 +46,31 @@ BD_QCEW_LAG = 6
 # Fourier seasonal expansion: number of harmonics (K)
 N_HARMONICS = 4
 
+# Era-specific latent state parameters.  Breakpoints partition the sample
+# into macro-structurally distinct regimes so mu_g and phi can vary.
+N_ERAS = 3
+ERA_BREAKS: list[date] = [date(2009, 1, 1), date(2020, 1, 1)]
+# Era 0: Pre-GFC    (2003-01 → 2008-12)
+# Era 1: Post-GFC   (2009-01 → 2019-12)
+# Era 2: Post-COVID  (2020-01 → present)
+
 # Cyclical indicators for structural BD model (demand-side covariates).
-# Each indicator is loaded from a CSV in DATA_DIR with columns (ref_date, <col>).
-# Weekly series are aggregated to monthly before centering.
+# Each indicator is downloaded from FRED into data/indicators/<name>.parquet
+# with a uniform (ref_date, value) schema.  Weekly series are aggregated
+# to monthly before centering.
 CYCLICAL_INDICATORS: list[dict] = [
-    {'name': 'claims', 'file': 'claims_weekly.csv', 'col': 'claims', 'freq': 'weekly'},
-    {'name': 'nfci', 'file': 'nfci.csv', 'col': 'nfci', 'freq': 'weekly'},
-    {'name': 'biz_apps', 'file': 'business_applications.csv', 'col': 'applications',
-     'freq': 'monthly'},
-    # JOLTS job openings (FRED: JTSJOL). Published ~2 months after reference
-    # period.  Revisions are small relative to cross-sectional variation (see
-    # JOLTS revision assessment in national_model_spec.md §2.3.1): mean absolute
+    {'name': 'claims', 'fred_id': 'ICNSA', 'freq': 'weekly'},
+    {'name': 'nfci', 'fred_id': 'NFCI', 'freq': 'weekly'},
+    {'name': 'biz_apps', 'fred_id': 'BABATOTALSAUS', 'freq': 'monthly'},
+    # JOLTS job openings.  Published ~2 months after reference period.
+    # Revisions are small relative to cross-sectional variation (see JOLTS
+    # revision assessment in national_model_spec.md §2.3.1): mean absolute
     # revision for 2003–2023 is ~1% of the level, well within the centered
-    # covariate range.  Final values with publication-lag censoring are sufficient;
-    # vintage tracking is not needed.  Openings chosen over hires (JTSHIL) as a
-    # leading demand indicator — openings lead the hiring cycle and show stronger
+    # covariate range.  Final values with publication-lag censoring are
+    # sufficient; vintage tracking is not needed.  Openings chosen over
+    # hires (JTSHIL) — openings lead the hiring cycle and show stronger
     # covariance with the BD component in out-of-sample tests.
-    {'name': 'jolts', 'file': 'jolts_openings.csv', 'col': 'openings', 'freq': 'monthly'},
+    {'name': 'jolts', 'fred_id': 'JTSJOL', 'freq': 'monthly'},
 ]
 
 # Plot colours — one per provider, cycled if >7 providers

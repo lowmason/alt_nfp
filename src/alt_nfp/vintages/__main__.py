@@ -2,22 +2,42 @@
 
 Usage::
 
-    python -m alt_nfp.vintages              # Run all steps
-    python -m alt_nfp.vintages release      # Scrape release dates
-    python -m alt_nfp.vintages download     # Download CES + QCEW revision files
-    python -m alt_nfp.vintages process      # Process CES, QCEW revisions
-    python -m alt_nfp.vintages releases     # Fetch current BLS estimates
-    python -m alt_nfp.vintages build        # Combine + build vintage_store
+    alt-nfp                          # Run all steps (or: python -m alt_nfp.vintages)
+    alt-nfp release                   # Scrape release dates
+    alt-nfp download                  # Download CES + QCEW revision files
+    alt-nfp download-indicators       # Download cyclical indicators from FRED
+    alt-nfp process                   # Process CES, QCEW revisions
+    alt-nfp releases                  # Fetch current BLS estimates
+    alt-nfp build                     # Combine + build vintage_store
+    alt-nfp build --releases PATH      # Build store using given releases.parquet
 """
 
 from __future__ import annotations
 
-import sys
+from pathlib import Path
+from typing import Optional
 
+import typer
 from dotenv import load_dotenv
 
+app = typer.Typer(help="Vintage-building pipeline for alt-nfp.")
 
-def cmd_release() -> None:
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    """Run all pipeline stages, or a single subcommand."""
+    load_dotenv()
+    if ctx.invoked_subcommand is None:
+        release()
+        download()
+        download_indicators()
+        process()
+        releases()
+        build(None)
+
+
+@app.command()
+def release() -> None:
     """Scrape BLS news releases and build release_dates + vintage_dates Parquets."""
     import asyncio
 
@@ -100,7 +120,8 @@ def cmd_release() -> None:
     print(f'Wrote {VINTAGE_DATES_PATH} ({len(vdf)} rows)')
 
 
-def cmd_download() -> None:
+@app.command()
+def download() -> None:
     """Download CES and QCEW data files."""
     from alt_nfp.vintages.download import download_ces, download_qcew, download_qcew_bulk
 
@@ -113,7 +134,19 @@ def cmd_download() -> None:
     print('Done.')
 
 
-def cmd_process() -> None:
+@app.command("download-indicators")
+def download_indicators() -> None:
+    """Download cyclical indicators from FRED into data/indicators/."""
+    from alt_nfp.ingest.indicators import download_indicators
+
+    print('Downloading cyclical indicators from FRED...')
+    results = download_indicators()
+    total = sum(results.values())
+    print(f'Done: {total} total rows across {len(results)} indicators.')
+
+
+@app.command()
+def process() -> None:
     """Run all processing steps: CES national, QCEW, combine."""
     from alt_nfp.vintages.processing.ces_national import main as ces_national_main
     from alt_nfp.vintages.processing.combine import main as combine_main
@@ -130,7 +163,8 @@ def cmd_process() -> None:
     combine_main()
 
 
-def cmd_releases() -> None:
+@app.command()
+def releases() -> None:
     """Fetch current BLS estimates and write releases.parquet."""
     from alt_nfp.ingest.releases import build_releases
 
@@ -138,53 +172,20 @@ def cmd_releases() -> None:
     build_releases()
 
 
-def cmd_build() -> None:
+@app.command()
+def build(
+    releases_path: Optional[Path] = typer.Option(
+        None,
+        "--releases",
+        path_type=Path,
+        help="Path to releases.parquet (default: use built-in location).",
+    ),
+) -> None:
     """Build the Hive-partitioned vintage store."""
     from alt_nfp.vintages.build_store import build_store
-
-    releases_path = None
-    args = sys.argv[2:]
-    if '--releases' in args:
-        idx = args.index('--releases')
-        if idx + 1 < len(args):
-            from pathlib import Path
-
-            releases_path = Path(args[idx + 1])
 
     build_store(releases_path=releases_path)
 
 
-def main() -> None:
-    """Dispatch to a subcommand, or run all stages if none is given."""
-    load_dotenv()
-    args = sys.argv[1:]
-
-    if not args:
-        cmd_release()
-        cmd_download()
-        cmd_process()
-        cmd_releases()
-        cmd_build()
-        return
-
-    subcommand = args[0]
-    dispatch = {
-        'release': cmd_release,
-        'download': cmd_download,
-        'process': cmd_process,
-        'releases': cmd_releases,
-        'build': cmd_build,
-    }
-    handler = dispatch.get(subcommand)
-    if handler is None:
-        print(f'Unknown subcommand: {subcommand}')
-        print(
-            'Usage: python -m alt_nfp.vintages '
-            '[release|download|process|releases|build]'
-        )
-        sys.exit(1)
-    handler()
-
-
 if __name__ == '__main__':
-    main()
+    app()

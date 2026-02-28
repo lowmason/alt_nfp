@@ -23,7 +23,7 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 
-from .config import N_HARMONICS, SIGMA_QCEW_M3, SIGMA_QCEW_M12
+from .config import CYCLICAL_INDICATORS, N_ERAS, N_HARMONICS, SIGMA_QCEW_M3, SIGMA_QCEW_M12
 
 
 def build_model(
@@ -66,23 +66,47 @@ def build_model(
         # Latent continuing-units growth: AR(1) with mean reversion
         # =============================================================
 
-        mu_g = pm.Normal("mu_g", mu=0.001, sigma=0.005)
-        phi = pm.Uniform("phi", lower=0.0, upper=0.99)
+        era_idx = data.get("era_idx")
+
         sigma_g = pm.HalfNormal("sigma_g", sigma=0.005)
-
         eps_g = pm.Normal("eps_g", 0, 1, shape=T)
-        g0 = mu_g + sigma_g * eps_g[0]
 
-        def ar1_step(e_t, g_prev, _mu, _phi, _sig):
-            return _mu + _phi * (g_prev - _mu) + _sig * e_t
+        if era_idx is not None:
+            mu_g_era = pm.Normal("mu_g_era", mu=0.001, sigma=0.005, shape=N_ERAS)
+            phi_raw_era = pm.Beta("phi_raw_era", alpha=18, beta=2, shape=N_ERAS)
 
-        g_rest, _ = pytensor.scan(
-            fn=ar1_step,
-            sequences=[eps_g[1:]],
-            outputs_info=[g0],
-            non_sequences=[mu_g, phi, sigma_g],
-            strict=True,
-        )
+            mu_g = mu_g_era[era_idx]       # (T,)
+            phi = phi_raw_era[era_idx]     # (T,)
+
+            g0 = mu_g[0] + sigma_g * eps_g[0]
+
+            def ar1_step_era(e_t, mu_t, phi_t, g_prev, _sig):
+                return mu_t + phi_t * (g_prev - mu_t) + _sig * e_t
+
+            g_rest, _ = pytensor.scan(
+                fn=ar1_step_era,
+                sequences=[eps_g[1:], mu_g[1:], phi[1:]],
+                outputs_info=[g0],
+                non_sequences=[sigma_g],
+                strict=True,
+            )
+        else:
+            mu_g = pm.Normal("mu_g", mu=0.001, sigma=0.005)
+            phi = pm.Uniform("phi", lower=0.0, upper=0.99)
+
+            g0 = mu_g + sigma_g * eps_g[0]
+
+            def ar1_step(e_t, g_prev, _mu, _phi, _sig):
+                return _mu + _phi * (g_prev - _mu) + _sig * e_t
+
+            g_rest, _ = pytensor.scan(
+                fn=ar1_step,
+                sequences=[eps_g[1:]],
+                outputs_info=[g0],
+                non_sequences=[mu_g, phi, sigma_g],
+                strict=True,
+            )
+
         g_cont = pt.concatenate([g0.reshape((1,)), g_rest])
         pm.Deterministic("g_cont", g_cont)
 
@@ -157,7 +181,7 @@ def build_model(
         )
 
         # Cyclical indicators (demand-side BD covariates)
-        cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']
+        cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]
         cyclical_data = []
         cyclical_names = []
         for key in cyclical_keys:

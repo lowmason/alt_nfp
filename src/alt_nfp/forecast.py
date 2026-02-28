@@ -30,8 +30,13 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
     pp_data = data["pp_data"]
 
     # --- Posterior parameter samples ---
-    mu_g_post = idata.posterior["mu_g"].values
-    phi_post = idata.posterior["phi"].values
+    if "mu_g_era" in idata.posterior:
+        # Era-specific: use last era (Post-COVID) for all forecast steps
+        mu_g_post = idata.posterior["mu_g_era"].values[:, :, -1]
+        phi_post = idata.posterior["phi_raw_era"].values[:, :, -1]
+    else:
+        mu_g_post = idata.posterior["mu_g"].values
+        phi_post = idata.posterior["phi"].values
     sigma_g_post = idata.posterior["sigma_g"].values
     fourier_post = idata.posterior["fourier_coefs_det"].values  # (chains, draws, n_years, 2K)
     g_cont_post = idata.posterior["g_cont"].values

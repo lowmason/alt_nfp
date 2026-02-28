@@ -194,6 +194,55 @@ def run_posterior_predictive_checks(
 
 
 # =========================================================================
+# Era-specific posterior summary
+# =========================================================================
+
+_ERA_LABELS = [
+    "Pre-GFC  (2003-2008)",
+    "Post-GFC (2009-2019)",
+    "Post-COVID (2020+)  ",
+]
+
+
+def print_era_summary(idata: az.InferenceData) -> None:
+    """Print posterior summaries of era-specific mu_g and phi parameters."""
+    if "mu_g_era" not in idata.posterior:
+        return
+
+    mu_g = idata.posterior["mu_g_era"].values       # (chains, draws, N_ERAS)
+    phi = idata.posterior["phi_raw_era"].values      # (chains, draws, N_ERAS)
+    n_eras = mu_g.shape[-1]
+
+    print("\n" + "=" * 72)
+    print("ERA-SPECIFIC LATENT STATE PARAMETERS")
+    print("=" * 72)
+    hdr = f"{'Era':<26} {'mu_g mean':>10} {'mu_g sd':>9} {'mu_g 80% HDI':>20}"
+    print(hdr)
+    print("-" * 72)
+    for e in range(n_eras):
+        v = mu_g[:, :, e].flatten()
+        label = _ERA_LABELS[e] if e < len(_ERA_LABELS) else f"Era {e}"
+        lo, hi = np.percentile(v, [10, 90])
+        print(
+            f"  {label:<24} {v.mean() * 100:+.4f}%  {v.std() * 100:.4f}%  "
+            f"[{lo * 100:+.4f}%, {hi * 100:+.4f}%]"
+        )
+
+    print()
+    hdr = f"{'Era':<26} {'phi mean':>10} {'phi sd':>9} {'phi 80% HDI':>20}"
+    print(hdr)
+    print("-" * 72)
+    for e in range(n_eras):
+        v = phi[:, :, e].flatten()
+        label = _ERA_LABELS[e] if e < len(_ERA_LABELS) else f"Era {e}"
+        lo, hi = np.percentile(v, [10, 90])
+        print(
+            f"  {label:<24} {v.mean():.4f}    {v.std():.4f}    "
+            f"[{lo:.4f}, {hi:.4f}]"
+        )
+
+
+# =========================================================================
 # LOO-CV
 # =========================================================================
 

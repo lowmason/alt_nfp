@@ -17,6 +17,8 @@ from .config import (
     BD_QCEW_LAG,
     CYCLICAL_INDICATORS,
     DATA_DIR,
+    ERA_BREAKS,
+    INDICATORS_DIR,
     PP_COLORS,
     ProviderConfig,
 )
@@ -31,6 +33,14 @@ _CYCLICAL_PUBLICATION_LAGS: dict[str, int] = {
     "biz_apps": 2,     # Census Business Formation Statistics — ~2 month lag
     "jolts": 2,        # BLS JOLTS job openings — ~2 month lag
 }
+
+
+def _date_to_era(d: date) -> int:
+    """Map a date to its era index using :data:`ERA_BREAKS`."""
+    for i, brk in enumerate(ERA_BREAKS):
+        if d < brk:
+            return i
+    return len(ERA_BREAKS)
 
 
 def _offset_month(d: date, months: int) -> date:
@@ -111,6 +121,7 @@ def panel_to_model_data(
     year0 = dates[0].year
     year_of_obs = np.array([d.year - year0 for d in dates], dtype=int)
     n_years = int(year_of_obs.max()) + 1
+    era_idx = np.array([_date_to_era(d) for d in dates], dtype=int)
 
     # Helper: one T-length array per source, filled from panel (final vintage per period)
     def _growth_series(source: str) -> np.ndarray:
@@ -333,6 +344,7 @@ def panel_to_model_data(
         month_of_year=month_of_year,
         year_of_obs=year_of_obs,
         n_years=n_years,
+        era_idx=era_idx,
         g_ces_sa=g_ces_sa,
         ces_sa_obs=ces_sa_obs,
         g_ces_nsa=g_ces_nsa,
@@ -383,30 +395,34 @@ def build_obs_sources(data: dict) -> dict:
 
 
 def _load_cyclical_indicators(dates: list, T: int) -> dict:
-    """Load cyclical indicator CSVs, align to model dates, and centre.
+    """Load cyclical indicators from parquet, align to model dates, and centre.
+
+    Reads from ``data/indicators/<name>.parquet`` (schema: ``ref_date``,
+    ``value``).  Weekly series are aggregated to monthly means before
+    centering.
 
     Returns a dict with keys like ``'claims_c'``, ``'nfci_c'``,
-    ``'biz_apps_c'`` mapping to centred numpy arrays of length *T*.
-    Missing files are gracefully skipped (value set to ``None``).
+    ``'biz_apps_c'``, ``'jolts_c'`` mapping to centred numpy arrays of
+    length *T*.  Missing files are gracefully skipped (value set to
+    ``None``).
     """
     result: dict = {}
 
     for spec in CYCLICAL_INDICATORS:
         key = f"{spec['name']}_c"
-        fpath = DATA_DIR / spec['file']
+        fpath = INDICATORS_DIR / f"{spec['name']}.parquet"
 
         if not fpath.exists():
             result[key] = None
             continue
 
         try:
-            raw = pl.read_csv(str(fpath), try_parse_dates=True).sort('ref_date')
+            raw = pl.read_parquet(fpath).sort('ref_date')
         except Exception:
             result[key] = None
             continue
 
-        col = spec['col']
-        if col not in raw.columns:
+        if 'value' not in raw.columns:
             result[key] = None
             continue
 
@@ -415,14 +431,19 @@ def _load_cyclical_indicators(dates: list, T: int) -> dict:
                 pl.col('ref_date').dt.truncate('1mo').alias('month')
             )
             monthly = raw.group_by('month').agg(
-                pl.col(col).mean().alias(col)
+                pl.col('value').mean().alias('value')
             ).sort('month').rename({'month': 'ref_date'})
         else:
-            monthly = raw.select(['ref_date', col])
+            monthly = raw.select(['ref_date', 'value'])
 
-        cal = pl.DataFrame({'ref_date': dates})
-        joined = cal.join(monthly, on='ref_date', how='left')
-        arr = joined[col].to_numpy().astype(float)
+        cal = pl.DataFrame({'ref_date': dates}).with_columns(
+            pl.col('ref_date').dt.truncate('1mo').alias('month')
+        )
+        monthly = monthly.with_columns(
+            pl.col('ref_date').dt.truncate('1mo').alias('month')
+        )
+        joined = cal.join(monthly.select(['month', 'value']), on='month', how='left')
+        arr = joined['value'].to_numpy().astype(float)
 
         if np.any(np.isfinite(arr)):
             mean_val = float(np.nanmean(arr))

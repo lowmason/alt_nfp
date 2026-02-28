@@ -26,13 +26,21 @@ from .panel_adapter import panel_to_model_data
 from .sampling import LIGHT_SAMPLER_KWARGS, sample_model
 
 
-def run_backtest(n_backtest: int = 24) -> list[dict]:
+def run_backtest(
+    n_backtest: int = 24,
+    *,
+    use_era_specific: bool = True,
+) -> list[dict]:
     """Run the nowcast backtest over the last *n_backtest* months.
 
     Parameters
     ----------
     n_backtest : int
         Number of trailing months to backtest (default 24).
+    use_era_specific : bool, optional
+        If True (default), use era-specific latent parameters when
+        ``era_idx`` is in the data dict.  If False, pass data without
+        ``era_idx`` for Phase 1 baseline comparison.
 
     Returns
     -------
@@ -63,6 +71,8 @@ def run_backtest(n_backtest: int = 24) -> list[dict]:
         print(f"\n--- Nowcast backtest {run + 1}/{n_backtest}: {target_date} ---")
 
         data = panel_to_model_data(panel, PROVIDERS, censor_ces_from=target_date)
+        if not use_era_specific and "era_idx" in data:
+            data = {k: v for k, v in data.items() if k != "era_idx"}
         model = build_model(data)
         idata = sample_model(model, sampler_kwargs=LIGHT_SAMPLER_KWARGS)
 

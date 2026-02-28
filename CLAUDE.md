@@ -36,14 +36,15 @@ python -c "from alt_nfp.benchmark_backtest import run_benchmark_backtest; run_be
 # Run the QCEW sigma sensitivity analysis
 python -c "from alt_nfp.sensitivity import run_sensitivity; run_sensitivity()"
 
-# Run the vintage pipeline CLI
-python -m alt_nfp.vintages
-
-# Update BLS publication dates (prints new entries for manual review)
-python -m alt_nfp.lookups.update_schedule
-
-# Build publication_calendar.parquet
-python scripts/build_publication_calendar.py
+# Run the vintage pipeline CLI (or: python -m alt_nfp.vintages)
+uv run alt-nfp
+uv run alt-nfp release
+uv run alt-nfp download
+uv run alt-nfp download-indicators
+uv run alt-nfp process
+uv run alt-nfp releases
+uv run alt-nfp build
+uv run alt-nfp build --releases PATH
 
 # Format code
 black . --line-length 100
@@ -65,12 +66,12 @@ alt_nfp/
 ├── alt_nfp_estimation_v3.py  # Thin runner script for the full pipeline
 ├── src/alt_nfp/              # Core Python package
 │   ├── __init__.py           # Package exports
-│   ├── config.py             # ProviderConfig, PROVIDERS list, paths, cyclical indicators
+│   ├── config.py             # ProviderConfig, PROVIDERS list, paths, cyclical indicators, era breaks
 │   ├── panel_adapter.py      # Panel → model data dict, cyclical indicators, as-of censoring
 │   ├── model.py              # PyMC model definition
 │   ├── sampling.py           # sample_model() — nutpie/PyMC with preset configs
 │   ├── diagnostics.py        # Parameter summary, precision budget, divergences
-│   ├── checks.py             # Prior/posterior predictive checks, LOO-CV
+│   ├── checks.py             # Prior/posterior predictive checks, LOO-CV, era summary
 │   ├── residuals.py          # Standardised residuals by source
 │   ├── plots.py              # Growth/seasonal, reconstructed index, BD diagnostics
 │   ├── forecast.py           # Forward simulation with structural BD propagation
@@ -82,12 +83,12 @@ alt_nfp/
 │   ├── lookups/              # Static reference tables
 │   │   ├── industry.py       # NAICS → supersector → domain hierarchy + CES series ID map
 │   │   ├── revision_schedules.py  # QCEW & CES vintage schedules + publication calendar
-│   │   ├── publication_dates.py   # Hard-coded BLS release dates (CES, QCEW, SAE)
 │   │   ├── benchmark_revisions.py # Historical actual BLS benchmark revisions
-│   │   ├── update_schedule.py     # CLI to fetch new dates from BLS schedule pages
 │   │   └── geography.py      # State/area geography hierarchy
 │   ├── ingest/               # Raw data → observation panel
 │   │   ├── base.py           # PANEL_SCHEMA, validate_panel
+│   │   ├── fred.py           # FRED API client (fetch_fred_series)
+│   │   ├── indicators.py     # Cyclical indicator store (download + read)
 │   │   ├── ces_national.py   # CES national-level ingestion
 │   │   ├── ces_state.py      # CES state-level ingestion
 │   │   ├── qcew.py           # QCEW ingestion
@@ -108,7 +109,7 @@ alt_nfp/
 │   │       ├── parser.py     # Schedule parser
 │   │       ├── scraper.py    # Release date scraper
 │   │       └── vintage_dates.py  # Vintage date management
-│   └── vintages/             # Vintage data pipeline (runnable: python -m alt_nfp.vintages)
+│   └── vintages/             # Vintage data pipeline (CLI: alt-nfp or python -m alt_nfp.vintages)
 │       ├── __main__.py       # CLI entry point
 │       ├── _client.py        # Vintage client utilities
 │       ├── build_store.py    # Build vintage store from raw data
@@ -127,6 +128,11 @@ alt_nfp/
 │   │   ├── source=ces/       #   partitioned by source × seasonally_adjusted
 │   │   ├── source=qcew/
 │   │   └── source=sae/
+│   ├── indicators/           # Cyclical indicator parquets (FRED-sourced)
+│   │   ├── claims.parquet    #   (ref_date, value) — ICNSA weekly claims
+│   │   ├── nfci.parquet      #   (ref_date, value) — Chicago Fed NFCI
+│   │   ├── biz_apps.parquet  #   (ref_date, value) — Census BFS applications
+│   │   └── jolts.parquet     #   (ref_date, value) — JOLTS job openings
 │   ├── providers/            # Payroll provider data (one dir per provider)
 │   │   └── G/g_provider.parquet    # Same schema as vintage_store minus
 │   │                               #   revision, benchmark_revision, vintage_date
@@ -143,7 +149,6 @@ alt_nfp/
 │   ├── reference/            # Static BLS crosswalks (CES/SAE industry + geography)
 │   │   ├── industry_codes.csv
 │   │   └── geographic_codes.csv
-│   └── publication_calendar.parquet
 ├── tests/                    # Test suite
 │   ├── test_lookups.py       # Industry hierarchy & revision schedule tests
 │   ├── test_ingest.py        # Panel validation & schema tests
@@ -151,19 +156,18 @@ alt_nfp/
 │   ├── test_release_dates.py # Release date parsing/scraping tests
 │   ├── test_vintage_store.py # Vintage store tests
 │   ├── test_vintages.py      # Vintage view & evaluation tests
-│   ├── test_publication_calendar.py  # Publication calendar build tests
-│   ├── test_publication_dates.py     # Publication date lookup tests
 │   ├── test_benchmark_backtest.py    # Benchmark backtest infrastructure tests
 │   ├── test_backtesting_smoke.py     # Integration smoke tests with real panel data
 │   ├── test_cyclical_indicators.py   # Cyclical indicator loading, centering, censoring
+│   ├── test_fred.py                  # FRED client, indicator store download/read tests
 │   ├── test_precision_budget.py      # Precision budget DataFrame structure tests
 │   ├── test_sensitivity_smoke.py     # Sensitivity analysis smoke tests
+│   ├── test_model.py                # Model construction tests (era-specific + scalar fallback)
 │   └── ingest/bls/           # BLS API client tests
 │       ├── test_downloads.py
 │       ├── test_http.py
 │       └── test_programs.py
 ├── scripts/                  # One-off build/maintenance scripts
-│   ├── build_publication_calendar.py  # Build publication_calendar.parquet
 │   └── benchmark_diagnostic.py       # Benchmark revision diagnostic runner
 ├── specs/                    # Design specifications
 │   └── vintage_pipeline_spec.md
@@ -183,17 +187,19 @@ alt_nfp/
 ## Key Code Patterns
 
 - **Config-driven providers**: adding a new payroll provider requires only a new `ProviderConfig` entry in `config.py`; data loading, model likelihood, diagnostics, plots, and forecasts adapt automatically.
+- **Era-specific latent state parameters** (`config.N_ERAS`, `config.ERA_BREAKS`): the AR(1) latent growth process uses era-indexed `mu_g_era` and `phi_raw_era` (Pre-GFC / Post-GFC / Post-COVID) when `era_idx` is present in the data dict (always, since `panel_to_model_data()` computes it). Gated in `build_model()` so removing `era_idx` from the data dict recovers the original scalar `mu_g`/`phi` baseline. The `pytensor.scan` passes per-timestep `mu_g[t]` and `phi[t]` as sequences; at era boundaries the dynamics parameters switch discretely while the latent state carries forward continuously. `phi_raw_era ~ Beta(18, 2)` (mode ≈ 0.94) replaces the scalar `Uniform(0, 0.99)`. `print_era_summary()` in `checks.py` reports per-era posteriors. `forecast.py` uses the last era (Post-COVID) for forward simulation.
 - **Structural birth/death model**: `bd_t = φ₀ + φ₁·X^birth + φ₂·BD^QCEW_{t-L} + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, nfci, biz_apps, jolts]` (centered cyclical indicators).
-- **Cyclical indicators** (`config.CYCLICAL_INDICATORS`): claims (weekly), NFCI (weekly), business applications (monthly), JOLTS openings (monthly). Each has a publication lag defined in `panel_adapter._CYCLICAL_PUBLICATION_LAGS` used for as-of censoring.
+- **Cyclical indicators** (`config.CYCLICAL_INDICATORS`): claims (weekly, FRED `ICNSA`), NFCI (weekly, FRED `NFCI`), business applications (monthly, FRED `BABATOTALSAUS`), JOLTS openings (monthly, FRED `JTSJOL`). Downloaded from FRED via `ingest/fred.py` into `data/indicators/<name>.parquet` (uniform `ref_date, value` schema). `_load_cyclical_indicators()` in `panel_adapter.py` reads parquet, aggregates weekly→monthly, joins to the model calendar via month-truncated keys (panel dates use day=12 BLS convention, indicators use day=1), and centers. Each has a publication lag in `panel_adapter._CYCLICAL_PUBLICATION_LAGS` used for as-of censoring. The model derives `cyclical_keys` dynamically from `CYCLICAL_INDICATORS` so new indicators are automatically picked up.
 - **Provider-specific error structures**: each provider can have `iid` or `ar1` measurement error.
 - `alt_nfp_estimation_v3.py` is a thin runner: `build_panel()` → `panel_to_model_data()` → `build_model()` → prior checks → sampling → diagnostics → PPC → LOO → plots → forecast → save.
 - **Data pipeline**: `build_panel()` (`ingest/panel.py`) reads the vintage store (`data/store/`) + provider parquet files (`data/providers/`) → `panel_to_model_data()` (`panel_adapter.py`) converts the panel to model arrays (growth rates, BD covariates, cyclical indicators). Provider files share the vintage store schema but omit `revision`, `benchmark_revision`, and `vintage_date` (no vintages for provider data; `ref_date` determines currency).
 - PyMC models are built declaratively; sampling uses nutpie when available.
 - Output artifacts (NetCDF inference data, PNG plots) go to `output/`.
+- **FRED API client** (`ingest/fred.py`): `fetch_fred_series(series_id)` downloads a single FRED time series via the JSON API (`api.stlouisfed.org`). Uses `httpx` with exponential-backoff retry. Requires `FRED_API_KEY` env var.
+- **Indicator store** (`ingest/indicators.py`): `download_indicators()` fetches all `CYCLICAL_INDICATORS` from FRED and writes to `data/indicators/`. `read_indicator(name)` loads a single parquet. CLI: `alt-nfp download-indicators`.
 - **BLS API client** (`ingest/bls/`): structured HTTP layer for downloading CES and QCEW data directly from BLS. `_programs.py` defines program metadata; `_http.py` handles request transport.
-- **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. Runnable as `python -m alt_nfp.vintages`. The canonical output is `data/store/`, a Hive-partitioned parquet dataset holding all current and prior vintages of CES, QCEW, and SAE data, partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
+- **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. CLI: `alt-nfp` (or `python -m alt_nfp.vintages`). The canonical output is `data/store/`, a Hive-partitioned parquet dataset holding all current and prior vintages of CES, QCEW, and SAE data, partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
 - **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to determine data availability windows for real-time vintage construction.
-- **Publication date lookups** (`lookups/publication_dates.py`): hard-coded BLS release dates for CES, QCEW, and SAE programs, scraped from BLS schedule pages. `update_schedule.py` fetches new dates and prints copy-paste-ready dict entries. `scripts/build_publication_calendar.py` merges historical + hard-coded dates into `publication_calendar.parquet`.
 - **Benchmark revision inference** (`benchmark.py`): extracts March-level employment changes from the posterior, compares to actual BLS benchmark revisions (`lookups/benchmark_revisions.py`), decomposes into continuing-units divergence + BD accumulation.
 - **Benchmark backtest** (`benchmark_backtest.py`): tests nowcasting accuracy at multiple horizons (T-12, T-9, T-6, T-3, T-1 months before March report). Uses `as_of` parameter in `panel_to_model_data()` to censor observations by vintage date, simulating real-time information sets. Computes RMSE, 90% coverage, and comparative baselines (naive zero, prior-year).
 - **Precision budget** (`diagnostics.compute_precision_budget()`): quantifies information contribution by source as `share_i = precision_i / Σ(precision)`, accounting for CES vintage-specific sigmas, QCEW M3/M12 distinctions, and provider signal loadings with AR1 autocorrelation. Outputs to `output/precision_budget.parquet`.

@@ -104,6 +104,8 @@ def run_benchmark_backtest(
     horizons: list[str] | None = None,
     sampler_kwargs: dict | None = None,
     checkpoint_dir: Path | None = None,
+    *,
+    use_era_specific: bool = True,
 ) -> pl.DataFrame:
     """Run the benchmark revision backtest.
 
@@ -128,6 +130,10 @@ def run_benchmark_backtest(
     checkpoint_dir : Path, optional
         If provided, intermediate results are saved to a parquet file in
         this directory after each run, enabling resumption.
+    use_era_specific : bool, optional
+        If True (default), use era-specific latent parameters when
+        ``era_idx`` is in the data dict.  If False, pass data without
+        ``era_idx`` so the model uses scalar mu_g/phi (Phase 1 baseline).
 
     Returns
     -------
@@ -199,6 +205,9 @@ def run_benchmark_backtest(
                     "in estimation period."
                 )
                 continue
+
+            if not use_era_specific and "era_idx" in data:
+                data = {k: v for k, v in data.items() if k != "era_idx"}
 
             model = build_model(data)
             idata = sample_model(model, sampler_kwargs=sampler_kwargs)

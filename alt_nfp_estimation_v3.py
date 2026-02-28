@@ -20,7 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
 
-from alt_nfp.checks import run_loo_cv, run_posterior_predictive_checks, run_prior_predictive_checks
+from alt_nfp.checks import (
+    print_era_summary,
+    run_loo_cv,
+    run_posterior_predictive_checks,
+    run_prior_predictive_checks,
+)
 from alt_nfp.config import OUTPUT_DIR, PROVIDERS
 from alt_nfp.diagnostics import plot_divergences, print_diagnostics, print_source_contributions
 from alt_nfp.forecast import forecast_and_plot
@@ -53,6 +58,7 @@ def main() -> None:
 
     # 5. Diagnostics ------------------------------------------------------------------------------
     print_diagnostics(idata, data)
+    print_era_summary(idata)
     print_source_contributions(idata, data)
     plot_divergences(idata, data)
 
