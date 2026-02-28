@@ -3,11 +3,10 @@
 Usage::
 
     alt-nfp                          # Run all steps (or: python -m alt_nfp.vintages)
-    alt-nfp release                   # Scrape release dates
     alt-nfp download                  # Download CES + QCEW revision files
     alt-nfp download-indicators       # Download cyclical indicators from FRED
-    alt-nfp process                   # Process CES, QCEW revisions
-    alt-nfp releases                  # Fetch current BLS estimates
+    alt-nfp process                   # Scrape BLS calendar + process revisions
+    alt-nfp current                   # Fetch current BLS estimates
     alt-nfp build                     # Combine + build vintage_store
     alt-nfp build --releases PATH      # Build store using given releases.parquet
 """
@@ -28,17 +27,44 @@ def main(ctx: typer.Context) -> None:
     """Run all pipeline stages, or a single subcommand."""
     load_dotenv()
     if ctx.invoked_subcommand is None:
-        release()
         download()
         download_indicators()
         process()
-        releases()
+        current()
         build(None)
 
 
 @app.command()
-def release() -> None:
-    """Scrape BLS news releases and build release_dates + vintage_dates Parquets."""
+def download() -> None:
+    """Download CES and QCEW data files."""
+    from alt_nfp.vintages.download import download_ces, download_qcew, download_qcew_bulk
+
+    print('Downloading CES vintage data...')
+    download_ces()
+    print('Downloading QCEW revisions CSV...')
+    download_qcew()
+    print('Downloading QCEW bulk quarterly files (2003-2025)...')
+    download_qcew_bulk()
+    print('Done.')
+
+
+@app.command("download-indicators")
+def download_indicators() -> None:
+    """Download cyclical indicators from FRED into data/indicators/."""
+    from alt_nfp.ingest.indicators import download_indicators
+
+    print('Downloading cyclical indicators from FRED...')
+    results = download_indicators()
+    total = sum(results.values())
+    print(f'Done: {total} total rows across {len(results)} indicators.')
+
+
+def _build_release_calendar() -> None:
+    """Scrape BLS publication schedule and build release/vintage date parquets.
+
+    Produces ``release_dates.parquet`` and ``vintage_dates.parquet`` in the
+    intermediate directory.  Called automatically by :func:`process`.
+    """
     import asyncio
 
     import httpx
@@ -77,7 +103,6 @@ def release() -> None:
 
     asyncio.run(_download_all_publications())
 
-    # Build release_dates.parquet
     print('Building release_dates...')
     rows = []
     for pub in PUBLICATIONS:
@@ -92,7 +117,6 @@ def release() -> None:
         schema={'publication': pl.Utf8, 'ref_date': pl.Date, 'vintage_date': pl.Date},
         orient='row',
     )
-    # Merge supplemental release dates
     supplemental = pl.DataFrame(
         [
             {'publication': p, 'ref_date': ref, 'vintage_date': vint}
@@ -112,7 +136,6 @@ def release() -> None:
     df.write_parquet(RELEASE_DATES_PATH)
     print(f'Wrote {RELEASE_DATES_PATH} ({len(df)} rows)')
 
-    # Build vintage_dates.parquet
     print('Building vintage_dates...')
     vdf = build_vintage_dates()
     VINTAGE_DATES_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -121,42 +144,17 @@ def release() -> None:
 
 
 @app.command()
-def download() -> None:
-    """Download CES and QCEW data files."""
-    from alt_nfp.vintages.download import download_ces, download_qcew, download_qcew_bulk
-
-    print('Downloading CES vintage data...')
-    download_ces()
-    print('Downloading QCEW revisions CSV...')
-    download_qcew()
-    print('Downloading QCEW bulk quarterly files (2003-2025)...')
-    download_qcew_bulk()
-    print('Done.')
-
-
-@app.command("download-indicators")
-def download_indicators() -> None:
-    """Download cyclical indicators from FRED into data/indicators/."""
-    from alt_nfp.ingest.indicators import download_indicators
-
-    print('Downloading cyclical indicators from FRED...')
-    results = download_indicators()
-    total = sum(results.values())
-    print(f'Done: {total} total rows across {len(results)} indicators.')
-
-
-@app.command()
 def process() -> None:
-    """Run all processing steps: CES national, QCEW, combine."""
+    """Scrape BLS release calendar, then process CES/QCEW revisions."""
     from alt_nfp.vintages.processing.ces_national import main as ces_national_main
     from alt_nfp.vintages.processing.combine import main as combine_main
     from alt_nfp.vintages.processing.qcew import main as qcew_main
-    # from alt_nfp.vintages.processing.sae_states import main as sae_states_main
 
-    print('=== Processing CES national revisions ===')
+    print('=== Building BLS release calendar ===')
+    _build_release_calendar()
+
+    print('\n=== Processing CES national revisions ===')
     ces_national_main()
-    # print('\n=== Processing SAE state revisions ===')
-    # sae_states_main()
     print('\n=== Processing QCEW revisions ===')
     qcew_main()
     print('\n=== Combining revisions ===')
@@ -164,11 +162,11 @@ def process() -> None:
 
 
 @app.command()
-def releases() -> None:
+def current() -> None:
     """Fetch current BLS estimates and write releases.parquet."""
     from alt_nfp.ingest.releases import build_releases
 
-    print('=== Building releases.parquet ===')
+    print('=== Fetching current BLS estimates ===')
     build_releases()
 
 

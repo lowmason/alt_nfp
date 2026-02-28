@@ -37,13 +37,12 @@ python -c "from alt_nfp.benchmark_backtest import run_benchmark_backtest; run_be
 python -c "from alt_nfp.sensitivity import run_sensitivity; run_sensitivity()"
 
 # Run the vintage pipeline CLI (or: python -m alt_nfp.vintages)
-uv run alt-nfp
-uv run alt-nfp release
-uv run alt-nfp download
-uv run alt-nfp download-indicators
-uv run alt-nfp process
-uv run alt-nfp releases
-uv run alt-nfp build
+uv run alt-nfp                     # Run all steps
+uv run alt-nfp download            # Download CES triangular + QCEW bulk
+uv run alt-nfp download-indicators # Download FRED cyclical indicators
+uv run alt-nfp process             # Scrape BLS calendar + process revisions
+uv run alt-nfp current             # Fetch current BLS estimates (benchmark-revised)
+uv run alt-nfp build               # Merge revisions + current → data/store/
 uv run alt-nfp build --releases PATH
 
 # Format code
@@ -198,8 +197,8 @@ alt_nfp/
 - **FRED API client** (`ingest/fred.py`): `fetch_fred_series(series_id)` downloads a single FRED time series via the JSON API (`api.stlouisfed.org`). Uses `httpx` with exponential-backoff retry. Requires `FRED_API_KEY` env var.
 - **Indicator store** (`ingest/indicators.py`): `download_indicators()` fetches all `CYCLICAL_INDICATORS` from FRED and writes to `data/indicators/`. `read_indicator(name)` loads a single parquet. CLI: `alt-nfp download-indicators`.
 - **BLS API client** (`ingest/bls/`): structured HTTP layer for downloading CES and QCEW data directly from BLS. `_programs.py` defines program metadata; `_http.py` handles request transport.
-- **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. CLI: `alt-nfp` (or `python -m alt_nfp.vintages`). The canonical output is `data/store/`, a Hive-partitioned parquet dataset holding all current and prior vintages of CES, QCEW, and SAE data, partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
-- **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to determine data availability windows for real-time vintage construction.
+- **Vintage pipeline** (`vintages/`): download → process → current → build workflow for managing real-time data vintages. CLI: `alt-nfp` (or `python -m alt_nfp.vintages`). Steps: `download` fetches raw CES triangular + QCEW bulk files; `process` scrapes the BLS release calendar (internally) then parses revisions into `revisions.parquet`; `current` fetches the latest BLS estimates (benchmark-revised) into `releases.parquet`; `build` merges both into `data/store/`, a Hive-partitioned parquet dataset partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
+- **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to assign `vintage_date` to each CES/QCEW revision. Built automatically by the `process` step; intermediate outputs are `release_dates.parquet` and `vintage_dates.parquet`.
 - **Benchmark revision inference** (`benchmark.py`): extracts March-level employment changes from the posterior, compares to actual BLS benchmark revisions (`lookups/benchmark_revisions.py`), decomposes into continuing-units divergence + BD accumulation.
 - **Nowcast backtest** (`backtest.py`): real-time vintage-aware backtest over the last *n* months. For each target month T, sets `as_of=T` so only data published by that date is available — CES gets the revision that existed at each point (T-1 = rev 0, T-2 = rev 1, T-3 = rev 2), QCEW is naturally missing for the most recent ~5-6 months, cyclical indicators are censored by their publication lags. Compares the model's nowcast to the final CES release. Reports per-month errors (growth pp, jobs-added k) and the vintage frontier (latest CES/QCEW period available). Requires the vintage store (`data/store/`) to have triangular revision history; warns when the CES frontier is stale.
 - **Benchmark backtest** (`benchmark_backtest.py`): tests benchmark revision prediction at multiple horizons (T-12, T-9, T-6, T-3, T-1 months before March report). Uses `as_of` parameter in `panel_to_model_data()` to censor observations by vintage date, simulating real-time information sets. Computes RMSE, 90% coverage, and comparative baselines (naive zero, prior-year).
