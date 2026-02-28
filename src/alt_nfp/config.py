@@ -144,9 +144,4 @@ class ProviderConfig:
 # (national aggregate only) without cell-level reweighting.
 
 PROVIDERS: list[ProviderConfig] = [
-    ProviderConfig(
-        name="G",
-        file="providers/G/g_provider.parquet",
-        error_model="iid",
-    ),
 ]

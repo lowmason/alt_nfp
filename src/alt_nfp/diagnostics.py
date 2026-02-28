@@ -50,7 +50,9 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
     var_names = [
         *latent_vars,
         "sigma_fourier",
-        "phi_0", "phi_1", "phi_2", "sigma_bd",
+        "phi_0", "sigma_bd",
+        *(["phi_1"] if "phi_1" in idata.posterior else []),
+        *(["phi_2"] if "phi_2" in idata.posterior else []),
         "alpha_ces", "lambda_ces", "sigma_ces_sa", "sigma_ces_nsa",
     ]
     # Cyclical indicator loadings (phi_3) if present
@@ -94,8 +96,6 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
 def _print_bd_summary(idata: az.InferenceData) -> None:
     """Print posterior summary of structural birth/death parameters."""
     phi_0 = idata.posterior["phi_0"].values.flatten()
-    phi_1 = idata.posterior["phi_1"].values.flatten()
-    phi_2 = idata.posterior["phi_2"].values.flatten()
     sigma_bd = idata.posterior["sigma_bd"].values.flatten()
     bd_mean = idata.posterior["bd"].values.mean(axis=(0, 1))
 
@@ -105,14 +105,18 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
         f"[{np.percentile(phi_0, 10) * 100:+.4f}%, "
         f"{np.percentile(phi_0, 90) * 100:+.4f}%]"
     )
-    print(
-        f"  \u03c6_1 (birth rate):   {phi_1.mean():.3f}  "
-        f"[{np.percentile(phi_1, 10):.3f}, {np.percentile(phi_1, 90):.3f}]"
-    )
-    print(
-        f"  \u03c6_2 (QCEW BD lag):  {phi_2.mean():.3f}  "
-        f"[{np.percentile(phi_2, 10):.3f}, {np.percentile(phi_2, 90):.3f}]"
-    )
+    if "phi_1" in idata.posterior:
+        phi_1 = idata.posterior["phi_1"].values.flatten()
+        print(
+            f"  \u03c6_1 (birth rate):   {phi_1.mean():.3f}  "
+            f"[{np.percentile(phi_1, 10):.3f}, {np.percentile(phi_1, 90):.3f}]"
+        )
+    if "phi_2" in idata.posterior:
+        phi_2 = idata.posterior["phi_2"].values.flatten()
+        print(
+            f"  \u03c6_2 (QCEW BD lag):  {phi_2.mean():.3f}  "
+            f"[{np.percentile(phi_2, 10):.3f}, {np.percentile(phi_2, 90):.3f}]"
+        )
     print(f"  \u03c3_bd (innovation):  {sigma_bd.mean() * 100:.4f}%")
 
     if "phi_3" in idata.posterior:
@@ -388,8 +392,9 @@ def plot_divergences(idata: az.InferenceData, data: dict) -> None:
     has_era = "mu_g_era" in idata.posterior
     pairs: list[tuple[str, str, str, str]] = [
         ("lambda_ces", "alpha_ces", "\u03bb_CES", "\u03b1_CES"),
-        ("phi_0", "phi_1", "\u03c6_0 (BD)", "\u03c6_1 (birth rate)"),
     ]
+    if "phi_1" in idata.posterior:
+        pairs.append(("phi_0", "phi_1", "\u03c6_0 (BD)", "\u03c6_1 (birth rate)"))
     if not has_era:
         pairs.insert(0, ("phi", "sigma_g", "\u03c6", "\u03c3_g"))
     for pp in data["pp_data"]:

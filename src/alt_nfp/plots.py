@@ -285,16 +285,17 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
     # Panel 4: BD covariate decomposition
     ax = axes[3]
     phi_0_m = idata.posterior["phi_0"].values.flatten().mean()
-    phi_1_m = idata.posterior["phi_1"].values.flatten().mean()
-    phi_2_m = idata.posterior["phi_2"].values.flatten().mean()
-
     c_phi0 = np.full(len(dates), phi_0_m * 100)
-    c_phi1 = phi_1_m * data["birth_rate_c"] * 100
-    c_phi2 = phi_2_m * data["bd_qcew_c"] * 100
-
     ax.plot(dates, c_phi0, lw=1.2, label="\u03c6\u2080 (intercept)", color="gray", ls="--")
-    ax.plot(dates, c_phi1, lw=1.2, label="\u03c6\u2081\u00b7birth_rate", color="#2ca02c")
-    ax.plot(dates, c_phi2, lw=1.2, label="\u03c6\u2082\u00b7QCEW_lag", color="#d62728")
+
+    if "phi_1" in idata.posterior:
+        phi_1_m = idata.posterior["phi_1"].values.flatten().mean()
+        c_phi1 = phi_1_m * data["birth_rate_c"] * 100
+        ax.plot(dates, c_phi1, lw=1.2, label="\u03c6\u2081\u00b7birth_rate", color="#2ca02c")
+    if "phi_2" in idata.posterior:
+        phi_2_m = idata.posterior["phi_2"].values.flatten().mean()
+        c_phi2 = phi_2_m * data["bd_qcew_c"] * 100
+        ax.plot(dates, c_phi2, lw=1.2, label="\u03c6\u2082\u00b7QCEW_lag", color="#d62728")
 
     # Cyclical contributions
     cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']

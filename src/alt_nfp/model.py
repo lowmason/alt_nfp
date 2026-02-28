@@ -167,18 +167,20 @@ def build_model(
         # =============================================================
 
         phi_0 = pm.Normal("phi_0", mu=0.001, sigma=0.002)
-        phi_1 = pm.Normal("phi_1", mu=0.5, sigma=0.5)
-        phi_2 = pm.Normal("phi_2", mu=0.3, sigma=0.3)
         sigma_bd = pm.HalfNormal("sigma_bd", sigma=0.001)
 
         xi_bd = pm.Normal("xi_bd", 0, 1, shape=T)
 
-        bd_t = (
-            phi_0
-            + phi_1 * pt.as_tensor_variable(data["birth_rate_c"])
-            + phi_2 * pt.as_tensor_variable(data["bd_qcew_c"])
-            + sigma_bd * xi_bd
-        )
+        bd_t = phi_0 + sigma_bd * xi_bd
+
+        has_birth = np.any(data["birth_rate_c"] != 0.0)
+        has_bd_qcew = np.any(data["bd_qcew_c"] != 0.0)
+        if has_birth:
+            phi_1 = pm.Normal("phi_1", mu=0.5, sigma=0.5)
+            bd_t = bd_t + phi_1 * pt.as_tensor_variable(data["birth_rate_c"])
+        if has_bd_qcew:
+            phi_2 = pm.Normal("phi_2", mu=0.3, sigma=0.3)
+            bd_t = bd_t + phi_2 * pt.as_tensor_variable(data["bd_qcew_c"])
 
         # Cyclical indicators (demand-side BD covariates)
         cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]

@@ -112,7 +112,7 @@ def _get_anchor_level(data: dict, march_year: int) -> float:
 
 def load_anchor_level_from_vintage_store(
     march_year: int,
-    industry_code: str = "05",
+    industry_code: str = "00",
 ) -> float:
     """Load CES NSA employment level at March Y-1 from the vintage store.
 
@@ -124,7 +124,7 @@ def load_anchor_level_from_vintage_store(
     march_year : int
         Benchmark reference year (anchor is March Y-1).
     industry_code : str
-        Industry code (default '05' = total private).
+        Industry code (default '00' = total nonfarm, all ownerships).
 
     Returns
     -------

@@ -24,7 +24,7 @@ uv sync
 # Run the main v3 model pipeline
 python alt_nfp_estimation_v3.py
 
-# Run the nowcast backtest (24-month CES-censoring experiment)
+# Run the nowcast backtest (real-time vintage-aware, 24 months)
 python -c "from alt_nfp.backtest import run_backtest; run_backtest()"
 
 # Run the benchmark revision diagnostic (Phase 1)
@@ -75,7 +75,7 @@ alt_nfp/
 │   ├── residuals.py          # Standardised residuals by source
 │   ├── plots.py              # Growth/seasonal, reconstructed index, BD diagnostics
 │   ├── forecast.py           # Forward simulation with structural BD propagation
-│   ├── backtest.py           # Nowcast backtest (CES-censoring experiment)
+│   ├── backtest.py           # Nowcast backtest (real-time vintage-aware)
 │   ├── benchmark.py          # Benchmark revision extraction & decomposition (Phase 1)
 │   ├── benchmark_backtest.py # Benchmark backtest with as-of censoring (Phase 2)
 │   ├── benchmark_plots.py    # Benchmark diagnostic visualizations
@@ -188,7 +188,7 @@ alt_nfp/
 
 - **Config-driven providers**: adding a new payroll provider requires only a new `ProviderConfig` entry in `config.py`; data loading, model likelihood, diagnostics, plots, and forecasts adapt automatically.
 - **Era-specific latent state parameters** (`config.N_ERAS`, `config.ERA_BREAKS`): the AR(1) latent growth process uses era-indexed `mu_g_era` and `phi_raw_era` (Pre-GFC / Post-GFC / Post-COVID) when `era_idx` is present in the data dict (always, since `panel_to_model_data()` computes it). Gated in `build_model()` so removing `era_idx` from the data dict recovers the original scalar `mu_g`/`phi` baseline. The `pytensor.scan` passes per-timestep `mu_g[t]` and `phi[t]` as sequences; at era boundaries the dynamics parameters switch discretely while the latent state carries forward continuously. `phi_raw_era ~ Beta(18, 2)` (mode ≈ 0.94) replaces the scalar `Uniform(0, 0.99)`. `print_era_summary()` in `checks.py` reports per-era posteriors. `forecast.py` uses the last era (Post-COVID) for forward simulation.
-- **Structural birth/death model**: `bd_t = φ₀ + φ₁·X^birth + φ₂·BD^QCEW_{t-L} + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, nfci, biz_apps, jolts]` (centered cyclical indicators).
+- **Structural birth/death model**: `bd_t = φ₀ + φ₁·X^birth + φ₂·BD^QCEW_{t-L} + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, nfci, biz_apps, jolts]` (centered cyclical indicators). `φ₁` and `φ₂` are gated out of the model graph when their covariates are all-zero (e.g. in backtest iterations where BD data is unavailable), avoiding unidentified parameters and divergences. Same pattern as `φ₃` / cyclical indicators.
 - **Cyclical indicators** (`config.CYCLICAL_INDICATORS`): claims (weekly, FRED `ICNSA`), NFCI (weekly, FRED `NFCI`), business applications (monthly, FRED `BABATOTALSAUS`), JOLTS openings (monthly, FRED `JTSJOL`). Downloaded from FRED via `ingest/fred.py` into `data/indicators/<name>.parquet` (uniform `ref_date, value` schema). `_load_cyclical_indicators()` in `panel_adapter.py` reads parquet, aggregates weekly→monthly, joins to the model calendar via month-truncated keys (panel dates use day=12 BLS convention, indicators use day=1), and centers. Each has a publication lag in `panel_adapter._CYCLICAL_PUBLICATION_LAGS` used for as-of censoring. The model derives `cyclical_keys` dynamically from `CYCLICAL_INDICATORS` so new indicators are automatically picked up.
 - **Provider-specific error structures**: each provider can have `iid` or `ar1` measurement error.
 - `alt_nfp_estimation_v3.py` is a thin runner: `build_panel()` → `panel_to_model_data()` → `build_model()` → prior checks → sampling → diagnostics → PPC → LOO → plots → forecast → save.
@@ -201,7 +201,8 @@ alt_nfp/
 - **Vintage pipeline** (`vintages/`): download → process → store workflow for managing real-time data vintages. CLI: `alt-nfp` (or `python -m alt_nfp.vintages`). The canonical output is `data/store/`, a Hive-partitioned parquet dataset holding all current and prior vintages of CES, QCEW, and SAE data, partitioned by `(source, seasonally_adjusted)`. Reader/writer utilities live in `ingest/vintage_store.py`.
 - **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to determine data availability windows for real-time vintage construction.
 - **Benchmark revision inference** (`benchmark.py`): extracts March-level employment changes from the posterior, compares to actual BLS benchmark revisions (`lookups/benchmark_revisions.py`), decomposes into continuing-units divergence + BD accumulation.
-- **Benchmark backtest** (`benchmark_backtest.py`): tests nowcasting accuracy at multiple horizons (T-12, T-9, T-6, T-3, T-1 months before March report). Uses `as_of` parameter in `panel_to_model_data()` to censor observations by vintage date, simulating real-time information sets. Computes RMSE, 90% coverage, and comparative baselines (naive zero, prior-year).
+- **Nowcast backtest** (`backtest.py`): real-time vintage-aware backtest over the last *n* months. For each target month T, sets `as_of=T` so only data published by that date is available — CES gets the revision that existed at each point (T-1 = rev 0, T-2 = rev 1, T-3 = rev 2), QCEW is naturally missing for the most recent ~5-6 months, cyclical indicators are censored by their publication lags. Compares the model's nowcast to the final CES release. Reports per-month errors (growth pp, jobs-added k) and the vintage frontier (latest CES/QCEW period available). Requires the vintage store (`data/store/`) to have triangular revision history; warns when the CES frontier is stale.
+- **Benchmark backtest** (`benchmark_backtest.py`): tests benchmark revision prediction at multiple horizons (T-12, T-9, T-6, T-3, T-1 months before March report). Uses `as_of` parameter in `panel_to_model_data()` to censor observations by vintage date, simulating real-time information sets. Computes RMSE, 90% coverage, and comparative baselines (naive zero, prior-year).
 - **Precision budget** (`diagnostics.compute_precision_budget()`): quantifies information contribution by source as `share_i = precision_i / Σ(precision)`, accounting for CES vintage-specific sigmas, QCEW M3/M12 distinctions, and provider signal loadings with AR1 autocorrelation. Outputs to `output/precision_budget.parquet`.
 - **`@pytest.mark.network`**: tests requiring network access are marked; deselect with `-m "not network"`.
 

@@ -117,12 +117,12 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
         specs.append(
             (f"\u03c3_ces_nsa_{vintage_labels[v]} (%)", "sigma_ces_nsa", v, 100, ".3f")
         )
-    specs.extend([
-        ("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"),
-        ("\u03c6_1 (birth)", "phi_1", None, 1, ".3f"),
-        ("\u03c6_2 (QCEW lag)", "phi_2", None, 1, ".3f"),
-        ("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"),
-    ])
+    specs.append(("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"))
+    if "phi_1" in idata.posterior:
+        specs.append(("\u03c6_1 (birth)", "phi_1", None, 1, ".3f"))
+    if "phi_2" in idata.posterior:
+        specs.append(("\u03c6_2 (QCEW lag)", "phi_2", None, 1, ".3f"))
+    specs.append(("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"))
     # Cyclical indicator loadings (phi_3) if available
     from .config import CYCLICAL_INDICATORS
 

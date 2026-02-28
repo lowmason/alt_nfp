@@ -58,7 +58,7 @@ def panel_to_model_data(
     as_of: date | None = None,
     *,
     geographic_code: str = "US",
-    industry_code: str = "05",
+    industry_code: str = "00",
 ) -> dict:
     """Convert an observation panel to the model data dict.
 
@@ -80,10 +80,8 @@ def panel_to_model_data(
         Geographic code to use for the main series (default 'US'; use '00' for
         vintage store convention).
     industry_code : str
-        Industry code for the main series (default '05' = total private).
-        Legacy path uses private only ('05'); vintage store may have '00' (total
-        nonfarm, all ownerships). Use '05' to align with legacy; pass '00' only
-        if you explicitly want all-ownerships.
+        Industry code for the main series (default '00' = total nonfarm, all
+        ownerships).  This is the canonical code used by the vintage store.
 
     Returns
     -------
@@ -110,8 +108,7 @@ def panel_to_model_data(
     if len(national) == 0:
         raise ValueError(
             f"No national observations for industry_code={industry_code!r}; "
-            "panel may be empty or use a different code (e.g. '00' = all ownerships). "
-            "Legacy uses '05' (private only)."
+            "panel may be empty or use a different industry_code."
         )
 
     # Unique sorted periods = model calendar
@@ -210,8 +207,6 @@ def panel_to_model_data(
         source_name = cfg.name.lower()
         emp_col = f"{cfg.name.lower()}_employment"
         g_pp = _growth_series(source_name)
-        if not np.any(np.isfinite(g_pp)):
-            g_pp = _growth_series(cfg.name)
         pp_obs = np.where(np.isfinite(g_pp))[0]
         entry: dict = {
             "name": cfg.name,

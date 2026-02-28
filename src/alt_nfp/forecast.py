@@ -45,8 +45,8 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
 
     # Structural BD parameters
     phi_0_post = idata.posterior["phi_0"].values
-    phi_1_post = idata.posterior["phi_1"].values
-    phi_2_post = idata.posterior["phi_2"].values
+    phi_1_post = idata.posterior["phi_1"].values if "phi_1" in idata.posterior else 0.0
+    phi_2_post = idata.posterior["phi_2"].values if "phi_2" in idata.posterior else 0.0
     sigma_bd_post = idata.posterior["sigma_bd"].values
 
     n_chains, n_draws, T_hist = g_cont_post.shape
