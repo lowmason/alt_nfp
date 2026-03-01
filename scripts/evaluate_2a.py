@@ -71,6 +71,12 @@ def main() -> None:
         action="store_true",
         help="Run only the nowcast backtest (era vs baseline); skip benchmark and diagnostics",
     )
+    parser.add_argument(
+        "--months",
+        type=int,
+        default=12,
+        help="Number of backtest months for the nowcast comparison (default: 12)",
+    )
     args = parser.parse_args()
 
     nowcast_only = args.nowcast_only
@@ -81,7 +87,7 @@ def main() -> None:
     else:
         years = None  # DEFAULT_YEARS
         horizons = None  # HORIZONS
-        n_backtest = 24
+        n_backtest = args.months
 
     out = OUTPUT_DIR
     out.mkdir(parents=True, exist_ok=True)

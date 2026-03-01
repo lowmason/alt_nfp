@@ -23,6 +23,7 @@ import polars as pl
 
 from alt_nfp.config import INTERMEDIATE_DIR
 from alt_nfp.ingest.release_dates.config import VINTAGE_DATES_PATH
+from alt_nfp.lookups.industry import SINGLE_SECTOR_SUPERSECTORS, _CES_SECTOR_TO_NAICS
 
 OUTPUT_PATH = INTERMEDIATE_DIR / 'sae_revisions.parquet'
 CHECKPOINT_PATH = INTERMEDIATE_DIR / 'sae_checkpoint.parquet'
@@ -440,6 +441,41 @@ def _split_revisions(
 # ---------------------------------------------------------------------------
 
 
+_SECTOR_RECODE = {
+    ces: naics
+    for ces, naics in _CES_SECTOR_TO_NAICS.items()
+    if ces != naics
+}
+
+
+def _recode_to_naics(df: pl.DataFrame) -> pl.DataFrame:
+    """Recode CES industry codes to NAICS equivalents and add sector aliases.
+
+    1. Remap CES sector codes (41→42, 42→44, 43→48) to match QCEW NAICS codes.
+    2. Duplicate single-sector supersectors (20, 50, 80) as sector rows (23, 51, 81).
+    """
+    if _SECTOR_RECODE:
+        df = df.with_columns(
+            pl.when(
+                (pl.col('industry_type') == 'sector')
+                & pl.col('industry_code').is_in(list(_SECTOR_RECODE.keys()))
+            )
+            .then(pl.col('industry_code').replace(_SECTOR_RECODE))
+            .otherwise(pl.col('industry_code'))
+            .alias('industry_code')
+        )
+
+    sector_aliases = df.filter(
+        (pl.col('industry_type') == 'supersector')
+        & pl.col('industry_code').is_in(list(SINGLE_SECTOR_SUPERSECTORS.keys()))
+    ).with_columns(
+        industry_type=pl.lit('sector'),
+        industry_code=pl.col('industry_code').replace(SINGLE_SECTOR_SUPERSECTORS),
+    )
+
+    return pl.concat([df, sector_aliases])
+
+
 def main() -> None:
     """Fetch all SAE series from ALFRED, process, and write Parquet.
 
@@ -498,6 +534,8 @@ def main() -> None:
         )
         .filter(pl.col('vintage_date').is_not_null())
     )
+
+    sae_df = _recode_to_naics(sae_df)
 
     print(f'Number of SAE revision observations (w/ dates): {sae_df.height:,}')
 

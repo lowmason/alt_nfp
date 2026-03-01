@@ -2,9 +2,9 @@
 
 **Alt-NFP Nowcasting System — Provider Signal Representativeness Correction**
 
-Version: 1.1 | Date: 2026-02-28 | Author: Lowell Mason
+Version: 1.1 \| Date: 2026-02-28 \| Author: Lowell Mason
 
----
+------------------------------------------------------------------------
 
 ## 1. Overview
 
@@ -23,7 +23,7 @@ Construct a provider-specific national composite that reweights cell-level conti
 The cell-level signals produced here serve all three releases through a **single parquet interface**. The private repo always exports the same cell-level (supersector × Census region) employment parquet; the `alt_nfp` public repo is responsible for QCEW weighting, compositing, and any release-specific aggregation.
 
 | Release | `alt_nfp` Consumption | What `alt_nfp` Does with the Parquet |
-|---------|----------------------|--------------------------------------|
+|----------------|--------------------|------------------------------------|
 | 1 (National Accuracy) | Full 52-cell parquet | QCEW-weighted composite → single national growth rate per provider |
 | 2 (Industry Decomposition) | Full 52-cell parquet | Aggregate cells by supersector → 13 supersector-level signals per provider |
 | 3 (Geographic × Industry) | Full 52-cell parquet | Use cell-level signals directly in cell-level measurement equations |
@@ -38,7 +38,7 @@ The private repo exports a single **cell-level employment parquet** per provider
 
 One row per provider × cell × month. The file covers the full 13 × 4 = 52 cell grid; cells with no provider coverage in a given month are omitted (implicit missing).
 
-```
+```         
 xxx_provider.parquet
 ─────────────────────────────────────────────────────────
 ref_date         : date       — reference month, always YYYY-MM-12
@@ -55,16 +55,16 @@ The `employment` column is the **level** of continuing-units employment from the
 
 **Conventions:**
 
-- `ref_date` uses the 12th to align with CES/QCEW reference period conventions (pay period including the 12th).
-- `employment` is expressed in thousands (e.g., 1,234.5 = 1,234,500 employees) to match BLS reporting units.
-- `n_pseudo_estabs` enables the public repo to apply minimum coverage thresholds without accessing microdata.
-- Cells below the minimum pseudo-establishment threshold (§4.2) should still be included in the parquet with `n_pseudo_estabs` reported; the public repo decides the threshold.
+-   `ref_date` uses the 12th to align with CES/QCEW reference period conventions (pay period including the 12th).
+-   `employment` is expressed in thousands (e.g., 1,234.5 = 1,234,500 employees) to match BLS reporting units.
+-   `n_pseudo_estabs` enables the public repo to apply minimum coverage thresholds without accessing microdata.
+-   Cells below the minimum pseudo-establishment threshold (§4.2) should still be included in the parquet with `n_pseudo_estabs` reported; the public repo decides the threshold.
 
 #### 1.4.2 Birth-Rate File (Optional, National Only)
 
 Birth rates remain a **national total** per provider per month — not cell-decomposed. Business formation events observed by a payroll provider are sparse enough that splitting across 52 cells would produce many zero-count months, adding noise without meaningful signal. The BD model in Release 1 is national-level, so a single series is the right granularity.
 
-```
+```         
 xxx_births.parquet
 ─────────────────────────────────────────────────────────
 ref_date         : date       — reference month, YYYY-MM-12
@@ -75,7 +75,7 @@ birth_rate       : float      — provider-observed business formation rate (nat
 
 #### 1.4.3 ProviderConfig Mapping
 
-```python
+``` python
 ProviderConfig(
     name='G',
     file='raw/providers/G/g_provider.parquet',
@@ -88,7 +88,7 @@ ProviderConfig(
 
 The `ProviderConfig` schema already supports `geography_type` / `geography_code` / `industry_type` / `industry_code` filter fields. When these are set to their defaults (`'national'` / `'00'`), the model expects a pre-aggregated national row. When the provider file contains cell-level data (detectable by `geography_type='census_region'`), the model's data-loading layer performs QCEW-weighted compositing before passing observations to the measurement equation.
 
----
+------------------------------------------------------------------------
 
 ## 2. Cell Definition
 
@@ -96,10 +96,10 @@ The `ProviderConfig` schema already supports `geography_type` / `geography_code`
 
 Cells are defined at **supersector × Census region**:
 
-- **Supersectors (13):** Logging & Mining, Construction, Manufacturing (Durable), Manufacturing (Nondurable), Trade/Transportation/Utilities, Information, Financial Activities, Professional & Business Services, Education & Health Services, Leisure & Hospitality, Other Services, Federal Government, State & Local Government.
-- **Census regions (4):** Northeast, Midwest, South, West.
+-   **Supersectors (13):** Logging & Mining, Construction, Manufacturing (Durable), Manufacturing (Nondurable), Trade/Transportation/Utilities, Information, Financial Activities, Professional & Business Services, Education & Health Services, Leisure & Hospitality, Other Services, Federal Government, State & Local Government.
+-   **Census regions (4):** Northeast, Midwest, South, West.
 
-Total cells: **52** (13 × 4). In practice, some cells may be empty for a given provider (e.g., government supersectors for private-sector-only providers), yielding ~40–48 active cells per provider.
+Total cells: **52** (13 × 4). In practice, some cells may be empty for a given provider (e.g., government supersectors for private-sector-only providers), yielding \~40–48 active cells per provider.
 
 ### 2.2 Why This Granularity
 
@@ -107,7 +107,7 @@ Supersector boundaries are wide enough that NAICS misclassification almost never
 
 Finer granularity (e.g., sector × state) would produce many sparse cells with unreliable growth signals and noisier composites, while barely improving the composition bias correction.
 
----
+------------------------------------------------------------------------
 
 ## 3. Pseudo-Establishment Pipeline
 
@@ -121,10 +121,10 @@ Pseudo-establishments transform client-level records into establishment-like uni
 
 Before clustering, classify each client as establishment-like, enterprise-like, or ambiguous using employee geographic dispersion:
 
-- **Distance distributions:** Percentile distances of employees from client address.
-- **Multimodality detection:** Mixture models on employee geocodes to detect distinct worksites.
-- **Industry- and metro-specific commuting priors:** A retail client with employees in 50 zip codes is enterprise-like; a professional services firm with employees within commuting distance of one office is establishment-like.
-- **Temporal stability:** Dispersion patterns that are stable over time are more reliable than transient patterns.
+-   **Distance distributions:** Percentile distances of employees from client address.
+-   **Multimodality detection:** Mixture models on employee geocodes to detect distinct worksites.
+-   **Industry- and metro-specific commuting priors:** A retail client with employees in 50 zip codes is enterprise-like; a professional services firm with employees within commuting distance of one office is establishment-like.
+-   **Temporal stability:** Dispersion patterns that are stable over time are more reliable than transient patterns.
 
 **Output:** A latent classification per client per panel window: `establishment_like`, `enterprise_like`, or `ambiguous`.
 
@@ -134,7 +134,7 @@ Establishment-like clients skip the geoclustering step and are assigned to their
 
 For enterprise-like and ambiguous clients, cluster employees into geographically coherent groups:
 
-```
+```         
 E_{c,k,t} = Σ_{i ∈ C_{c,k}} 1{i employed in p(t)}
 ```
 
@@ -144,8 +144,8 @@ where `C_{c,k}` is the set of employees assigned to cluster `k` within client `c
 
 **Assignment:**
 
-- **Geography:** Cluster centroid (or population-weighted medoid) determines Census region assignment. For supersector × Census region cells, centroid-based assignment is almost always correct.
-- **Industry:** Inherited from the client's NAICS code. Reliable at the supersector level — NAICS codes almost never cross supersector boundaries.
+-   **Geography:** Cluster centroid (or population-weighted medoid) determines Census region assignment. For supersector × Census region cells, centroid-based assignment is almost always correct.
+-   **Industry:** Inherited from the client's NAICS code. Reliable at the supersector level — NAICS codes almost never cross supersector boundaries.
 
 ### 3.4 Degraded Location Information
 
@@ -167,10 +167,10 @@ Only the headquarter state is known. This is informative for small firms (client
 
 **Hybrid allocation:**
 
-- Clients below a size threshold (calibrated per industry using QCEW MWR data on multi-establishment rates): accept headquarters state assignment.
-- Clients above the threshold: redistribute employment across states using QCEW state × industry shares as allocation weights.
+-   Clients below a size threshold (calibrated per industry using QCEW MWR data on multi-establishment rates): accept headquarters state assignment.
+-   Clients above the threshold: redistribute employment across states using QCEW state × industry shares as allocation weights.
 
-```
+```         
 Ê_{c,g,t} = E_{c,t} * s_{g,n_c}^{QCEW}
 ```
 
@@ -188,11 +188,11 @@ Under degraded location information, cell-level coverage ratios (payroll employm
 
 **Remedies:**
 
-- **Aggregate to coarser cells.** At supersector × Census region, cells are large enough that ratios above 1 are rare.
-- **Iterative proportional fitting (raking).** Treat allocation as a two-dimensional margins problem with known provider employment totals by industry and QCEW state × industry population totals. Raking produces an internally consistent allocation respecting both dimensions.
-- **Two-stage approach.** Stage 1: small clients contribute directly to cell-level signals. Stage 2: large clients above the size threshold are redistributed and then raked to QCEW margins.
+-   **Aggregate to coarser cells.** At supersector × Census region, cells are large enough that ratios above 1 are rare.
+-   **Iterative proportional fitting (raking).** Treat allocation as a two-dimensional margins problem with known provider employment totals by industry and QCEW state × industry population totals. Raking produces an internally consistent allocation respecting both dimensions.
+-   **Two-stage approach.** Stage 1: small clients contribute directly to cell-level signals. Stage 2: large clients above the size threshold are redistributed and then raked to QCEW margins.
 
----
+------------------------------------------------------------------------
 
 ## 4. Frozen Panel Construction at Cell Level
 
@@ -200,16 +200,16 @@ Under degraded location information, cell-level coverage ratios (payroll employm
 
 The same rotating, frozen measurement panel used for the raw national index applies at the cell level. At fixed refresh intervals (e.g., quarterly):
 
-1. Define an eligible set of pseudo-establishments that have satisfied a stabilization rule (≥K consecutive reference periods or change-point-based stabilization).
-2. Freeze this set for the panel window. Do not add new pseudo-establishments mid-window.
-3. Within the frozen window, compute month-to-month growth using matched pseudo-establishment observations only.
-4. Pseudo-establishments that administratively exit during the window are removed without contributing negative change.
+1.  Define an eligible set of pseudo-establishments that have satisfied a stabilization rule (≥K consecutive reference periods or change-point-based stabilization).
+2.  Freeze this set for the panel window. Do not add new pseudo-establishments mid-window.
+3.  Within the frozen window, compute month-to-month growth using matched pseudo-establishment observations only.
+4.  Pseudo-establishments that administratively exit during the window are removed without contributing negative change.
 
 ### 4.2 Cell-Level Growth Signal
 
 Within each cell `c`, continuing-units growth is:
 
-```
+```         
 y_{p,c,t}^G = matched-panel growth of pseudo-establishments in cell c
 ```
 
@@ -219,12 +219,12 @@ y_{p,c,t}^G = matched-panel growth of pseudo-establishments in cell c
 
 When the panel refreshes, pseudo-establishment compositions within cells may shift. The panel refresh procedure should:
 
-- Re-run geoclustering on the current employee snapshot.
-- Re-assign pseudo-establishments to cells.
-- Apply stabilization rules to pseudo-establishments in each cell independently.
-- Smoothly transition between panel windows (the existing panel rotation mechanics handle this).
+-   Re-run geoclustering on the current employee snapshot.
+-   Re-assign pseudo-establishments to cells.
+-   Apply stabilization rules to pseudo-establishments in each cell independently.
+-   Smoothly transition between panel windows (the existing panel rotation mechanics handle this).
 
----
+------------------------------------------------------------------------
 
 ## 5. QCEW-Weighted National Composite
 
@@ -234,15 +234,15 @@ When the panel refreshes, pseudo-establishment compositions within cells may shi
 
 The provider's representativeness-corrected national signal is:
 
-```
+```         
 y_{p,t}^G = Σ_c w_{c,t}^{QCEW} * y_{p,c,t}^G
 ```
 
 where:
 
-- `y_{p,c,t}^G` is provider `p`'s continuing-units growth in cell `c` at time `t`, computed as the log-difference of the `employment` column in the provider parquet: `y_{p,c,t}^G = ln(E_{p,c,t}) - ln(E_{p,c,t-1})`.
-- `w_{c,t}^{QCEW}` is cell `c`'s share of national employment from the most recent QCEW vintage.
-- The summation is over all cells `c` with non-missing provider coverage and sufficient pseudo-establishment counts.
+-   `y_{p,c,t}^G` is provider `p`'s continuing-units growth in cell `c` at time `t`, computed as the log-difference of the `employment` column in the provider parquet: `y_{p,c,t}^G = ln(E_{p,c,t}) - ln(E_{p,c,t-1})`.
+-   `w_{c,t}^{QCEW}` is cell `c`'s share of national employment from the most recent QCEW vintage.
+-   The summation is over all cells `c` with non-missing provider coverage and sufficient pseudo-establishment counts.
 
 ### 5.2 Weight Redistribution for Missing Cells
 
@@ -250,23 +250,23 @@ For cells where a provider has no coverage (or coverage below the minimum thresh
 
 **Algorithm:**
 
-1. Let `C_covered` = set of cells with valid provider signals.
-2. Let `C_missing` = set of cells without coverage.
-3. For each missing cell `(s, r)` (supersector `s`, region `r`):
-   a. Distribute its weight proportionally across covered cells in supersector `s` (preserving industry distribution).
-   b. If no covered cells exist in supersector `s`, distribute across covered cells in region `r` (preserving geographic distribution).
-   c. If neither produces a match (extremely rare at this granularity), distribute uniformly across all covered cells.
-4. Renormalize so weights sum to 1.0.
+1.  Let `C_covered` = set of cells with valid provider signals.
+2.  Let `C_missing` = set of cells without coverage.
+3.  For each missing cell `(s, r)` (supersector `s`, region `r`):
+    a.  Distribute its weight proportionally across covered cells in supersector `s` (preserving industry distribution).
+    b.  If no covered cells exist in supersector `s`, distribute across covered cells in region `r` (preserving geographic distribution).
+    c.  If neither produces a match (extremely rare at this granularity), distribute uniformly across all covered cells.
+4.  Renormalize so weights sum to 1.0.
 
 ### 5.3 QCEW Weight Updates
 
-QCEW weights are updated as new QCEW vintages become available (~quarterly with ~5 month lag). Between updates, the most recent available weights are used. The pipeline should track which QCEW vintage was used for each month's composite.
+QCEW weights are updated as new QCEW vintages become available (\~quarterly with \~5 month lag). Between updates, the most recent available weights are used. The pipeline should track which QCEW vintage was used for each month's composite.
 
 ### 5.4 Residual Composition Effects
 
 Representativeness correction at the supersector × Census region level does not eliminate all composition effects. Within-cell heterogeneity (e.g., size class skew, sub-industry concentration) still creates provider-specific deviations from national growth. These residual effects are absorbed by the provider-specific bias `α_p` and noise `σ_{G,p}` in the downstream measurement equation. The correction reduces the **time-varying** component of composition bias — the part that matters for nowcasting accuracy — while leaving the time-invariant component to the existing parameter structure.
 
----
+------------------------------------------------------------------------
 
 ## 6. Validation
 
@@ -274,27 +274,27 @@ Representativeness correction at the supersector × Census region level does not
 
 For each provider, compute:
 
-1. **Cell-level coverage ratios:** `payroll_emp_{p,c,t} / QCEW_emp_{c,t}` for each cell and month. Flag cells with ratios >1.0 or <0.01.
-2. **Industry concentration index:** Herfindahl of provider employment across supersectors, compared to QCEW Herfindahl. The correction should bring the provider's effective Herfindahl closer to QCEW's.
-3. **Geographic concentration index:** Same as above for Census regions.
-4. **Time-varying composition shift:** Track how the provider's effective industry/geography mix changes over time. Large shifts indicate composition drift that the correction should address.
+1.  **Cell-level coverage ratios:** `payroll_emp_{p,c,t} / QCEW_emp_{c,t}` for each cell and month. Flag cells with ratios \>1.0 or \<0.01.
+2.  **Industry concentration index:** Herfindahl of provider employment across supersectors, compared to QCEW Herfindahl. The correction should bring the provider's effective Herfindahl closer to QCEW's.
+3.  **Geographic concentration index:** Same as above for Census regions.
+4.  **Time-varying composition shift:** Track how the provider's effective industry/geography mix changes over time. Large shifts indicate composition drift that the correction should address.
 
 ### 6.2 Signal Quality Diagnostics (Private Repo Validation)
 
-1. **Composite vs. raw comparison.** For each provider, internally compute a QCEW-weighted composite from the cell-level parquet and compare against the raw aggregate index. Compute the correlation, mean divergence, and periods of maximum divergence. Divergence should be largest during months of heterogeneous sectoral growth.
-2. **QCEW tracking.** Compare the internally-computed composite against QCEW national growth (lagged). The corrected signal should track QCEW more closely than the raw signal, especially at turning points.
-3. **Coverage share time series.** Track the QCEW employment share of covered cells over time. Declining coverage indicates the provider is losing representation in important cells.
-4. **Cell employment stability.** Check that cell-level employment levels in the parquet are smooth across panel refresh boundaries — artificial jumps indicate geoclustering instability.
+1.  **Composite vs. raw comparison.** For each provider, internally compute a QCEW-weighted composite from the cell-level parquet and compare against the raw aggregate index. Compute the correlation, mean divergence, and periods of maximum divergence. Divergence should be largest during months of heterogeneous sectoral growth.
+2.  **QCEW tracking.** Compare the internally-computed composite against QCEW national growth (lagged). The corrected signal should track QCEW more closely than the raw signal, especially at turning points.
+3.  **Coverage share time series.** Track the QCEW employment share of covered cells over time. Declining coverage indicates the provider is losing representation in important cells.
+4.  **Cell employment stability.** Check that cell-level employment levels in the parquet are smooth across panel refresh boundaries — artificial jumps indicate geoclustering instability.
 
 ### 6.3 Downstream Evaluation (Public Repo)
 
 After integrating the cell-level parquets into the `alt_nfp` model (where QCEW-weighted compositing is performed):
 
-1. Does the posterior `α_p` (provider bias) shrink toward zero? The correction should absorb composition bias that was previously captured by the static bias term.
-2. Does the posterior `σ_{G,p}` (provider noise) decrease? Less time-varying composition bias means less unexplained variance.
-3. Does nowcast RMSE improve? This is the ultimate test.
+1.  Does the posterior `α_p` (provider bias) shrink toward zero? The correction should absorb composition bias that was previously captured by the static bias term.
+2.  Does the posterior `σ_{G,p}` (provider noise) decrease? Less time-varying composition bias means less unexplained variance.
+3.  Does nowcast RMSE improve? This is the ultimate test.
 
----
+------------------------------------------------------------------------
 
 ## 7. Implementation Plan
 
@@ -304,11 +304,11 @@ After integrating the cell-level parquets into the `alt_nfp` model (where QCEW-w
 
 **Steps:**
 
-1. Implement establishment-likeness diagnostics (§3.2).
-2. Implement geoclustering for enterprise-like clients (§3.3).
-3. Implement degraded-location fallbacks appropriate to each provider's data (§3.4).
-4. Assign pseudo-establishments to supersector × Census region cells.
-5. Validate cell assignments against known multi-establishment firms.
+1.  Implement establishment-likeness diagnostics (§3.2).
+2.  Implement geoclustering for enterprise-like clients (§3.3).
+3.  Implement degraded-location fallbacks appropriate to each provider's data (§3.4).
+4.  Assign pseudo-establishments to supersector × Census region cells.
+5.  Validate cell assignments against known multi-establishment firms.
 
 **Output:** A pseudo-establishment table with columns: `pseudo_estab_id`, `client_id`, `supersector`, `census_region`, `cell`, `employment`, `period`.
 
@@ -318,10 +318,10 @@ After integrating the cell-level parquets into the `alt_nfp` model (where QCEW-w
 
 **Steps:**
 
-1. Apply the frozen panel methodology at the cell level (§4).
-2. Compute cell-level continuing-units growth for each provider × cell × month.
-3. Aggregate pseudo-establishment employment to cell level (for parquet export).
-4. Apply minimum coverage thresholds and flag unreliable cells.
+1.  Apply the frozen panel methodology at the cell level (§4).
+2.  Compute cell-level continuing-units growth for each provider × cell × month.
+3.  Aggregate pseudo-establishment employment to cell level (for parquet export).
+4.  Apply minimum coverage thresholds and flag unreliable cells.
 
 **Output:** A cell-level growth table with columns: `provider`, `cell`, `period`, `growth`, `employment`, `n_pseudo_estabs`, `is_reliable`.
 
@@ -331,13 +331,13 @@ After integrating the cell-level parquets into the `alt_nfp` model (where QCEW-w
 
 **Steps:**
 
-1. Aggregate pseudo-establishment employment to cell (supersector × Census region) × month level.
-2. Express employment in thousands (000s).
-3. Set `ref_date` to the 12th of each reference month.
-4. Map cells to `geography_type='census_region'`, `geography_code` ∈ {'1','2','3','4'} and `industry_type='supersector'`, `industry_code` per BLS codes.
-5. Include `n_pseudo_estabs` per cell × month for downstream threshold filtering.
-6. Export as `xxx_provider.parquet` per the schema in §1.4.1.
-7. Separately, compute national birth rates and export as `xxx_births.parquet` per §1.4.2 (if birth data available).
+1.  Aggregate pseudo-establishment employment to cell (supersector × Census region) × month level.
+2.  Express employment in thousands (000s).
+3.  Set `ref_date` to the 12th of each reference month.
+4.  Map cells to `geography_type='census_region'`, `geography_code` ∈ {'1','2','3','4'} and `industry_type='supersector'`, `industry_code` per BLS codes.
+5.  Include `n_pseudo_estabs` per cell × month for downstream threshold filtering.
+6.  Export as `xxx_provider.parquet` per the schema in §1.4.1.
+7.  Separately, compute national birth rates and export as `xxx_births.parquet` per §1.4.2 (if birth data available).
 
 **Output:** The cell-level employment parquet and (optionally) national birth-rate parquet, per the interface contracts in §1.4.
 
@@ -345,30 +345,30 @@ After integrating the cell-level parquets into the `alt_nfp` model (where QCEW-w
 
 **Steps:**
 
-1. Run composition bias diagnostics (§6.1) on the exported cell-level parquet.
-2. Internally compute a QCEW-weighted national composite from the parquet to run signal quality diagnostics (§6.2) — this composite is for validation only, not exported.
-3. Verify parquet schema compliance (ref_date format, employment units, cell coverage).
+1.  Run composition bias diagnostics (§6.1) on the exported cell-level parquet.
+2.  Internally compute a QCEW-weighted national composite from the parquet to run signal quality diagnostics (§6.2) — this composite is for validation only, not exported.
+3.  Verify parquet schema compliance (ref_date format, employment units, cell coverage).
 
 ### 7.5 Phase 5: Integration (Public Repo)
 
 **Steps:**
 
-1. Place the provider parquet in the `alt_nfp` data directory per `ProviderConfig.file`.
-2. Implement or verify the QCEW-weighted compositing logic in `alt_nfp`'s data-loading layer:
-   - Load QCEW employment shares at supersector × Census region level.
-   - Apply minimum `n_pseudo_estabs` threshold (configurable in `ProviderConfig` or model constants).
-   - Redistribute weights for missing/below-threshold cells per §5.2.
-   - Compute weighted national composite growth rate.
-3. Run the `alt_nfp` model with the cell-sourced composites and compare against previous results (§6.3).
+1.  Place the provider parquet in the `alt_nfp` data directory per `ProviderConfig.file`.
+2.  Implement or verify the QCEW-weighted compositing logic in `alt_nfp`'s data-loading layer:
+    -   Load QCEW employment shares at supersector × Census region level.
+    -   Apply minimum `n_pseudo_estabs` threshold (configurable in `ProviderConfig` or model constants).
+    -   Redistribute weights for missing/below-threshold cells per §5.2.
+    -   Compute weighted national composite growth rate.
+3.  Run the `alt_nfp` model with the cell-sourced composites and compare against previous results (§6.3).
 
----
+------------------------------------------------------------------------
 
 ## 8. Data Requirements
 
 ### 8.1 Provider Microdata (Private Repo)
 
 | Data | Description | Used in |
-|------|-------------|---------|
+|------------------|--------------------------------|-----------------------|
 | Employee records | Employee ID, geocode/zip/state, client ID, pay period, employment status | Phase 1 |
 | Client records | Client ID, NAICS code, headquarters address, employment count | Phase 1 |
 | Frozen panel definitions | Panel window dates, eligible client sets | Phase 2 |
@@ -376,19 +376,19 @@ After integrating the cell-level parquets into the `alt_nfp` model (where QCEW-w
 ### 8.2 External Data (Already Available)
 
 | Data | Source | Used in |
-|------|--------|---------|
+|-------------------|-------------------------|----------------------------|
 | QCEW employment by supersector × state | BLS QCEW via `alt_nfp` ingest | Phase 4 validation (private repo); Phase 5 compositing (`alt_nfp`) |
 | Census region ↔ state mapping | Census Bureau | Phase 1, 3, 5 |
 | Supersector ↔ NAICS mapping | BLS | Phase 1 |
 | QCEW MWR multi-establishment rates | BLS QCEW | Phase 1 (threshold calibration) |
 
----
+------------------------------------------------------------------------
 
 ## 9. Configuration
 
 Each provider's pipeline is configured by extending `ProviderConfig` with location-information metadata:
 
-```python
+``` python
 @dataclass
 class ReprCorrectionConfig:
     """Provider-specific representativeness correction settings."""
@@ -412,29 +412,29 @@ class ReprCorrectionConfig:
     qcew_weight_vintage: str = 'latest'  # or specific quarter
 ```
 
----
+------------------------------------------------------------------------
 
 ## 10. Risks and Mitigations
 
 | Risk | Impact | Mitigation |
-|------|--------|------------|
+|------------------|----------------------|--------------------------------|
 | Geoclustering produces unstable pseudo-establishments across panel refreshes | Cell-level growth signals have artificial volatility at refresh boundaries | Temporal stability checks in diagnostics; smooth transitions between panels |
-| Provider has no coverage in key supersectors (e.g., government) | Weight redistribution distorts the composite | Track coverage_share; flag providers with <70% coverage of private-sector QCEW employment |
+| Provider has no coverage in key supersectors (e.g., government) | Weight redistribution distorts the composite | Track coverage_share; flag providers with \<70% coverage of private-sector QCEW employment |
 | Size threshold for hybrid allocation is miscalibrated | Over-redistribution (lose real signal) or under-redistribution (retain HQ bias) | Calibrate per industry using QCEW MWR data; validate against provider's own located clients |
 | QCEW weights are stale (5–6 month lag) | Composite lags structural shifts in employment distribution | Use most recent vintage; track staleness; future: implement QCEW forecasting (Release 3) |
 | Different providers have different location regimes | Inconsistent correction quality across providers | Document regime per provider; downstream model absorbs differences via `α_p` and `σ_{G,p}` |
 | Sparse cells produce noisy growth signals | Composite quality degrades | Minimum coverage threshold; weight redistribution; coarser cell definition if needed |
 
----
+------------------------------------------------------------------------
 
 ## 11. Success Criteria
 
-1. **Composition bias reduction:** For each provider, the corrected composite's industry and geographic Herfindahl indices are closer to QCEW's than the raw signal's.
+1.  **Composition bias reduction:** For each provider, the corrected composite's industry and geographic Herfindahl indices are closer to QCEW's than the raw signal's.
 
-2. **QCEW tracking improvement:** The corrected composite has lower RMSE against QCEW national growth than the raw signal, measured out-of-sample with QCEW publication lag respected.
+2.  **QCEW tracking improvement:** The corrected composite has lower RMSE against QCEW national growth than the raw signal, measured out-of-sample with QCEW publication lag respected.
 
-3. **Downstream model improvement:** When the corrected composites are consumed by the `alt_nfp` model, at least one of: (a) posterior `α_p` shrinks, (b) posterior `σ_{G,p}` shrinks, (c) nowcast RMSE improves.
+3.  **Downstream model improvement:** When the corrected composites are consumed by the `alt_nfp` model, at least one of: (a) posterior `α_p` shrinks, (b) posterior `σ_{G,p}` shrinks, (c) nowcast RMSE improves.
 
-4. **Coverage adequacy:** Each active provider covers cells representing ≥70% of private-sector QCEW employment by QCEW weight share.
+4.  **Coverage adequacy:** Each active provider covers cells representing ≥70% of private-sector QCEW employment by QCEW weight share.
 
-5. **Pipeline stability:** Cell-level growth signals are stable across panel refreshes (no artificial volatility spikes at refresh boundaries).
+5.  **Pipeline stability:** Cell-level growth signals are stable across panel refreshes (no artificial volatility spikes at refresh boundaries).

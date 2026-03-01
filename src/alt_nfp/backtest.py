@@ -181,13 +181,25 @@ def run_backtest(
         g_sa_post = idata.posterior["g_total_sa"].values
         g_sa_mean = np.nanmean(g_sa_post, axis=(0, 1))
 
+        # Map target_date to the censored model's index (the censored
+        # model may have fewer time steps than the full model).
+        censored_dates = data["dates"]
+        if target_date in censored_dates:
+            c_idx = censored_dates.index(target_date)
+        else:
+            c_idx = len(censored_dates) - 1
+            print(
+                f"  NOTE: Target {target_date} beyond censored horizon "
+                f"({censored_dates[-1]}); using last latent state as proxy"
+            )
+
         nowcast_index_series = np.empty(len(g_sa_mean) + 1, dtype=float)
         nowcast_index_series[0] = base_index
         for s in range(len(g_sa_mean)):
             nowcast_index_series[s + 1] = nowcast_index_series[s] * np.exp(g_sa_mean[s])
-        nowcast_growth = g_sa_mean[t_idx]
-        nowcast_index = nowcast_index_series[t_idx + 1]
-        prev_index = nowcast_index_series[t_idx]
+        nowcast_growth = g_sa_mean[c_idx]
+        nowcast_index = nowcast_index_series[c_idx + 1]
+        prev_index = nowcast_index_series[c_idx]
 
         actual_growth = g_ces_sa_actual[t_idx]
         actual_index = (
@@ -201,14 +213,14 @@ def run_backtest(
         err_growth_pp = (nowcast_growth - actual_growth) * 100
         err_level_k = (actual_index - nowcast_index) / 1000.0
 
-        # Track which sources have data for the target month
+        # Track which sources have data for the target month (use c_idx)
         sources: list[str] = []
-        if t_idx in data["ces_sa_obs"]:
+        if c_idx in data["ces_sa_obs"]:
             sources.append("CES")
-        if t_idx in data["qcew_obs"]:
+        if c_idx in data["qcew_obs"]:
             sources.append("QCEW")
         for pp in data["pp_data"]:
-            if t_idx in pp["pp_obs"]:
+            if c_idx in pp["pp_obs"]:
                 sources.append(pp["name"])
         sources_str = "+".join(sources) if sources else "none"
 
