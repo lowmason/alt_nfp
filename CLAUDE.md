@@ -98,7 +98,7 @@ alt_nfp/
 │   │   ├── aggregate.py      # Data aggregation utilities
 │   │   ├── releases.py       # Release management
 │   │   ├── tagger.py         # Data tagging (source/vintage metadata)
-│   │   ├── vintage_store.py  # Vintage data storage/retrieval
+│   │   ├── vintage_store.py  # Vintage data storage/retrieval + rank-based horizon censoring
 │   │   ├── bls/              # BLS API client layer
 │   │   │   ├── _http.py      # HTTP transport for BLS API
 │   │   │   ├── _programs.py  # BLS program definitions (CES, QCEW, etc.)
@@ -155,7 +155,7 @@ alt_nfp/
 │   ├── test_ingest.py        # Panel validation & schema tests
 │   ├── test_new_ingest.py    # Tests for new ingest modules
 │   ├── test_release_dates.py # Release date parsing/scraping tests
-│   ├── test_vintage_store.py # Vintage store tests
+│   ├── test_vintage_store.py # Vintage store tests + rank-based censoring helpers + validation guards
 │   ├── test_vintages.py      # Vintage view & evaluation tests
 │   ├── test_benchmark_backtest.py    # Benchmark backtest infrastructure tests
 │   ├── test_backtesting_smoke.py     # Integration smoke tests with real panel data
@@ -164,6 +164,7 @@ alt_nfp/
 │   ├── test_precision_budget.py      # Precision budget DataFrame structure tests
 │   ├── test_sensitivity_smoke.py     # Sensitivity analysis smoke tests
 │   ├── test_model.py                # Model construction tests (era-specific + scalar fallback)
+│   ├── test_store_coverage.py       # Store data-integrity tests + CES censored diagonal invariant
 │   └── ingest/bls/           # BLS API client tests
 │       ├── test_downloads.py
 │       ├── test_http.py
@@ -193,7 +194,8 @@ alt_nfp/
 - **Cyclical indicators** (`config.CYCLICAL_INDICATORS`): claims (weekly, FRED `ICNSA`), NFCI (weekly, FRED `NFCI`), business applications (monthly, FRED `BABATOTALSAUS`), JOLTS openings (monthly, FRED `JTSJOL`). Downloaded from FRED via `ingest/fred.py` into `data/indicators/<name>.parquet` (uniform `ref_date, value` schema). `_load_cyclical_indicators()` in `panel_adapter.py` reads parquet, aggregates weekly→monthly, joins to the model calendar via month-truncated keys (panel dates use day=12 BLS convention, indicators use day=1), and centers. Each has a publication lag in `panel_adapter._CYCLICAL_PUBLICATION_LAGS` used for as-of censoring. The model derives `cyclical_keys` dynamically from `CYCLICAL_INDICATORS` so new indicators are automatically picked up.
 - **Provider-specific error structures**: each provider can have `iid` or `ar1` measurement error.
 - `alt_nfp_estimation_v3.py` is a thin runner: `build_panel()` → `panel_to_model_data()` → `build_model()` → prior checks → sampling → diagnostics → PPC → LOO → plots → forecast → save.
-- **Data pipeline**: `build_panel()` (`ingest/panel.py`) reads the vintage store (`data/store/`) + provider parquet files (`data/providers/`) → `panel_to_model_data()` (`panel_adapter.py`) converts the panel to model arrays (growth rates, BD covariates, cyclical indicators). Provider files share the vintage store schema but omit `revision`, `benchmark_revision`, and `vintage_date` (no vintages for provider data; `ref_date` determines currency).
+- **Data pipeline**: `build_panel()` (`ingest/panel.py`) reads the vintage store (`data/store/`) + provider parquet files (`data/providers/`) → `panel_to_model_data()` (`panel_adapter.py`) converts the panel to model arrays (growth rates, BD covariates, cyclical indicators). Provider files share the vintage store schema but omit `revision`, `benchmark_revision`, and `vintage_date` (no vintages for provider data; `ref_date` determines currency). `build_panel(as_of_ref=D)` activates rank-based horizon censoring for CES/QCEW (see below).
+- **Rank-based horizon censoring** (`vintage_store.py`): `transform_to_panel(lf, as_of_ref=D)` applies two-layer censoring: (1) `vintage_date <= D` + `ref_date < D` filtering prevents lookahead; (2) rank-based selection picks the correct revision per recency rank. CES uses `_select_ces_at_horizon`: rank 1→rev-0, rank 2→rev-1, rank 3+→rev-2 (with `max(benchmark_revision)` for older periods), producing the triangular diagonal invariant. QCEW uses `_select_qcew_at_horizon`: quarter-dependent revision rules matching BLS publication schedule (`_QCEW_MAX_REVISION = {Q1: 4, Q2: 3, Q3: 2, Q4: 1}`). Both helpers have fallback logic when prescribed revisions don't exist at the data frontier. `_validate_censored_selection` runs fail-fast checks (no duplicate ref_dates, consecutive months, no null/zero employment/growth, row count sanity) before data reaches the sampler. Growth is computed *before* rank selection to preserve per-vintage measurement error semantics.
 - PyMC models are built declaratively; sampling uses nutpie when available.
 - Output artifacts (NetCDF inference data, PNG plots) go to `output/`.
 - **FRED API client** (`ingest/fred.py`): `fetch_fred_series(series_id)` downloads a single FRED time series via the JSON API (`api.stlouisfed.org`). Uses `httpx` with exponential-backoff retry. Requires `FRED_API_KEY` env var.
@@ -204,7 +206,7 @@ alt_nfp/
 - **QCEW processing** (`vintages/processing/qcew.py`): four input streams from bulk data: (1) total all-ownership → `(national, '00')`; (2) private 2-digit NAICS sectors (excluding manufacturing); (3) government by ownership (`own_code` 1/2/3 → sectors 91/92/93 via `GOVT_OWNERSHIP_TO_SECTOR`); (4) manufacturing 3-digit NAICS subsectors → durable (sector 31) / nondurable (sector 32) via `NAICS3_TO_MFG_SECTOR`. Sectors aggregate → supersectors (including 90=Government) → domains (05, 06, 07, 08). Single-sector supersectors (20/50/80) naturally produce sector rows (23/51/81) from the NAICS mapping. QCEW national has 38 industry combos; CES national has 35 (difference: CES uses its own sector codes 41/42/43 for Wholesale/Retail/Transport vs NAICS 42/44/48, and QCEW has 3 extra NAICS sectors 23/51/81).
 - **Release date tracking** (`ingest/release_dates/`): scrapes and parses BLS publication schedules to assign `vintage_date` to each CES/QCEW revision. Built automatically by the `process` step; intermediate outputs are `release_dates.parquet` and `vintage_dates.parquet`.
 - **Benchmark revision inference** (`benchmark.py`): extracts March-level employment changes from the posterior, compares to actual BLS benchmark revisions (`lookups/benchmark_revisions.py`), decomposes into continuing-units divergence + BD accumulation.
-- **Nowcast backtest** (`backtest.py`): real-time vintage-aware backtest over the last *n* months. For each target month T, sets `as_of=T` so only data published by that date is available — CES gets the revision that existed at each point (T-1 = rev 0, T-2 = rev 1, T-3 = rev 2), QCEW is naturally missing for the most recent ~5-6 months, cyclical indicators are censored by their publication lags. Compares the model's nowcast to the final CES release. Reports per-month errors (growth pp, jobs-added k) and the vintage frontier (latest CES/QCEW period available). Requires the vintage store (`data/store/`) to have triangular revision history; warns when the CES frontier is stale.
+- **Nowcast backtest** (`backtest.py`): real-time vintage-aware backtest over the last *n* months. For each target month T, builds a censored panel via `build_panel(as_of_ref=T)` (rank-based CES/QCEW selection), then applies `panel_to_model_data(panel, PROVIDERS, as_of=T)` for provider/cyclical indicator censoring. CES gets the revision that existed at each point (T-1 = rev 0, T-2 = rev 1, T-3 = rev 2), QCEW is naturally missing for the most recent ~5-6 months, cyclical indicators are censored by their publication lags. Compares the model's nowcast to the final CES release. Reports per-month errors (growth pp, jobs-added k) and the vintage frontier (latest CES/QCEW period available). Requires the vintage store (`data/store/`) to have triangular revision history; warns when the CES frontier is stale.
 - **Benchmark backtest** (`benchmark_backtest.py`): tests benchmark revision prediction at multiple horizons (T-12, T-9, T-6, T-3, T-1 months before March report). Uses `as_of` parameter in `panel_to_model_data()` to censor observations by vintage date, simulating real-time information sets. Computes RMSE, 90% coverage, and comparative baselines (naive zero, prior-year).
 - **Precision budget** (`diagnostics.compute_precision_budget()`): quantifies information contribution by source as `share_i = precision_i / Σ(precision)`, accounting for CES vintage-specific sigmas, QCEW M3/M12 distinctions, and provider signal loadings with AR1 autocorrelation. Outputs to `output/precision_budget.parquet`.
 - **`@pytest.mark.network`**: tests requiring network access are marked; deselect with `-m "not network"`.

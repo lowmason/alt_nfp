@@ -16,10 +16,15 @@ from alt_nfp.ingest.vintage_store import (
     transform_to_panel,
 )
 
-# Access private helper for direct unit testing
+# Access private helpers for direct unit testing
 from alt_nfp.ingest import vintage_store as _vs
 
 _derive_source_tags = _vs._derive_source_tags
+_select_ces_at_horizon = _vs._select_ces_at_horizon
+_select_qcew_at_horizon = _vs._select_qcew_at_horizon
+_validate_censored_selection = _vs._validate_censored_selection
+_CES_SERIES_KEY = _vs._CES_SERIES_KEY
+_QCEW_SERIES_KEY = _vs._QCEW_SERIES_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -611,3 +616,397 @@ class TestCompactPartition:
     def test_compact_missing_partition(self, tmp_path):
         """Non-existent partition logs warning, no error."""
         compact_partition(tmp_path, "nonexistent", True)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for rank-based selection tests
+# ---------------------------------------------------------------------------
+
+
+def _ref(y: int, m: int) -> date:
+    """Shorthand for BLS-convention ref_date (day=12)."""
+    return date(y, m, 12)
+
+
+def _make_ces_triangle(
+    n_months: int = 6,
+    *,
+    sa: bool = True,
+    geo_type: str = "national",
+    geo_code: str = "00",
+    ind_type: str = "national",
+    ind_code: str = "00",
+    base_year: int = 2024,
+    base_month: int = 1,
+    base_emp: float = 150_000.0,
+    include_benchmark: bool = False,
+) -> pl.DataFrame:
+    """Build a synthetic CES DataFrame with triangular revision structure.
+
+    Each ref_date gets revisions 0, 1, 2 (benchmark_revision=0), and
+    optionally revision 2 with benchmark_revision=1.  Vintage dates are
+    staggered: rev-0 published 1 month after ref, rev-1 two months, etc.
+    Growth column is pre-computed for convenience.
+    """
+    rows: list[dict] = []
+    for i in range(n_months):
+        total = base_year * 12 + (base_month - 1) + i
+        y = total // 12
+        m = total % 12 + 1
+        rd = _ref(y, m)
+        emp_base = base_emp + i * 100.0
+
+        for rev in range(3):
+            vtotal = total + rev + 1
+            vy, vm = vtotal // 12, vtotal % 12 + 1
+            rows.append({
+                "geographic_type": geo_type,
+                "geographic_code": geo_code,
+                "industry_type": ind_type,
+                "industry_code": ind_code,
+                "ref_date": rd,
+                "vintage_date": date(vy, vm, 6),
+                "revision": rev,
+                "benchmark_revision": 0,
+                "employment": emp_base + rev * 5.0,
+                "source": "ces",
+                "seasonally_adjusted": sa,
+            })
+
+        if include_benchmark:
+            # Benchmark revision published ~14 months later
+            vtotal = total + 14
+            vy, vm = vtotal // 12, vtotal % 12 + 1
+            rows.append({
+                "geographic_type": geo_type,
+                "geographic_code": geo_code,
+                "industry_type": ind_type,
+                "industry_code": ind_code,
+                "ref_date": rd,
+                "vintage_date": date(vy, vm, 7),
+                "revision": 2,
+                "benchmark_revision": 1,
+                "employment": emp_base + 20.0,
+                "source": "ces",
+                "seasonally_adjusted": sa,
+            })
+
+    df = pl.DataFrame(rows, schema=VINTAGE_STORE_SCHEMA)
+    # Pre-compute growth within revision groups (mirrors transform_to_panel step 3)
+    growth_group = [
+        "seasonally_adjusted", "geographic_type", "geographic_code",
+        "industry_type", "industry_code", "revision", "benchmark_revision",
+    ]
+    df = (
+        df.sort(*growth_group, "ref_date")
+        .with_columns(
+            pl.col("employment").log().diff().over(growth_group).alias("growth")
+        )
+        .filter(pl.col("growth").is_not_null() & pl.col("growth").is_finite())
+    )
+    return df
+
+
+def _make_qcew_revisions(
+    n_months: int = 12,
+    *,
+    geo_type: str = "national",
+    geo_code: str = "00",
+    ind_type: str = "national",
+    ind_code: str = "00",
+    base_year: int = 2020,
+    base_month: int = 1,
+    base_emp: float = 140_000.0,
+) -> pl.DataFrame:
+    """Build a synthetic QCEW DataFrame with quarter-dependent revisions.
+
+    Q1 months get revisions 0-4, Q2 gets 0-3, Q3 gets 0-2, Q4 gets 0-1.
+    """
+    max_rev = {1: 4, 2: 3, 3: 2, 4: 1}
+    rows: list[dict] = []
+    for i in range(n_months):
+        total = base_year * 12 + (base_month - 1) + i
+        y = total // 12
+        m = total % 12 + 1
+        rd = _ref(y, m)
+        quarter = (m - 1) // 3 + 1
+        emp_base = base_emp + i * 100.0
+
+        for rev in range(max_rev[quarter] + 1):
+            vtotal = total + (rev + 1) * 3
+            vy, vm = vtotal // 12, vtotal % 12 + 1
+            rows.append({
+                "geographic_type": geo_type,
+                "geographic_code": geo_code,
+                "industry_type": ind_type,
+                "industry_code": ind_code,
+                "ref_date": rd,
+                "vintage_date": date(vy, vm, 15),
+                "revision": rev,
+                "benchmark_revision": 0,
+                "employment": emp_base + rev * 3.0,
+                "source": "qcew",
+                "seasonally_adjusted": False,
+            })
+
+    df = pl.DataFrame(rows, schema=VINTAGE_STORE_SCHEMA)
+    growth_group = [
+        "geographic_type", "geographic_code",
+        "industry_type", "industry_code", "revision", "benchmark_revision",
+    ]
+    df = (
+        df.sort(*growth_group, "ref_date")
+        .with_columns(
+            pl.col("employment").log().diff().over(growth_group).alias("growth")
+        )
+        .filter(pl.col("growth").is_not_null() & pl.col("growth").is_finite())
+    )
+    return df
+
+
+# ---------------------------------------------------------------------------
+# _select_ces_at_horizon
+# ---------------------------------------------------------------------------
+
+
+class TestSelectCesAtHorizon:
+    """CES rank-based diagonal selection."""
+
+    def test_basic_diagonal(self):
+        """With a full triangle, selection produces 1 rev-0, 1 rev-1, rest rev-2."""
+        df = _make_ces_triangle(n_months=8)
+        D = _ref(2024, 9)
+
+        selected = _select_ces_at_horizon(df, D)
+
+        # One row per ref_date
+        sk = _CES_SERIES_KEY
+        n_unique = selected.select(sk + ["ref_date"]).unique().height
+        assert n_unique == len(selected)
+
+        rev_counts = selected.group_by("revision").agg(pl.len().alias("n"))
+        rev_map = {r["revision"]: r["n"] for r in rev_counts.iter_rows(named=True)}
+        assert rev_map.get(0, 0) == 1
+        assert rev_map.get(1, 0) == 1
+        assert rev_map.get(2, 0) == len(selected) - 2
+
+    def test_rank1_gets_revision_0(self):
+        """The most recent ref_date is selected at revision 0."""
+        df = _make_ces_triangle(n_months=6)
+        D = _ref(2024, 7)
+
+        selected = _select_ces_at_horizon(df, D).sort("ref_date", descending=True)
+        newest = selected.head(1)
+        assert newest["revision"][0] == 0
+        assert newest["benchmark_revision"][0] == 0
+
+    def test_consecutive_ref_dates(self):
+        """Selected ref_dates are consecutive months with no gaps."""
+        df = _make_ces_triangle(n_months=10)
+        D = _ref(2024, 11)
+        selected = _select_ces_at_horizon(df, D)
+
+        dates = selected["ref_date"].sort().to_list()
+        for i in range(1, len(dates)):
+            d1, d2 = dates[i - 1], dates[i]
+            month_diff = (d2.year - d1.year) * 12 + d2.month - d1.month
+            assert month_diff == 1, f"Gap: {d1} → {d2}"
+
+    def test_fallback_when_revision_missing(self):
+        """When prescribed revision doesn't exist, fallback picks max(revision)."""
+        # Build a triangle but remove all rev-0 rows → rank 1 must fallback
+        df = _make_ces_triangle(n_months=6)
+        df_no_rev0 = df.filter(pl.col("revision") != 0)
+        D = _ref(2024, 7)
+
+        selected = _select_ces_at_horizon(df_no_rev0, D)
+        # Should still have all ref_dates (no drops)
+        all_rds = df_no_rev0.filter(pl.col("ref_date") < D)["ref_date"].unique()
+        assert selected["ref_date"].n_unique() == all_rds.n_unique()
+
+    def test_benchmark_revision_max_for_rank4plus(self):
+        """Rank 4+ prefers revision=2 with max benchmark_revision."""
+        df = _make_ces_triangle(n_months=8, include_benchmark=True)
+        D = _ref(2024, 9)
+
+        selected = _select_ces_at_horizon(df, D).sort("ref_date")
+        # Oldest ref_dates (rank >= 4) should have benchmark_revision=1
+        rank4plus = selected.head(len(selected) - 3)  # all except newest 3
+        assert all(r == 1 for r in rank4plus["benchmark_revision"].to_list())
+
+    def test_empty_input(self):
+        """Empty DataFrame returns empty."""
+        df = _make_ces_triangle(n_months=6)
+        empty = df.filter(pl.lit(False))
+        result = _select_ces_at_horizon(empty, _ref(2024, 7))
+        assert len(result) == 0
+
+    def test_two_series(self):
+        """Selection works independently per series."""
+        s1 = _make_ces_triangle(n_months=6, ind_code="05")
+        s2 = _make_ces_triangle(n_months=6, ind_code="30")
+        df = pl.concat([s1, s2])
+        D = _ref(2024, 7)
+
+        selected = _select_ces_at_horizon(df, D)
+        by_ind = selected.group_by("industry_code").agg(pl.len().alias("n"))
+        # Each series should have the same number of selected rows
+        counts = by_ind["n"].to_list()
+        assert len(counts) == 2
+        assert counts[0] == counts[1]
+
+
+# ---------------------------------------------------------------------------
+# _select_qcew_at_horizon
+# ---------------------------------------------------------------------------
+
+
+class TestSelectQcewAtHorizon:
+    """QCEW rank-based diagonal selection with quarter-dependent rules."""
+
+    def test_basic_selection_2017plus(self):
+        """Post-2017 QCEW selection produces one row per ref_date."""
+        df = _make_qcew_revisions(n_months=12, base_year=2020)
+        D = _ref(2021, 1)
+
+        selected = _select_qcew_at_horizon(df, D)
+        sk = _QCEW_SERIES_KEY
+        n_unique = selected.select(sk + ["ref_date"]).unique().height
+        assert n_unique == len(selected)
+
+    def test_rank1_gets_revision_0(self):
+        """The most recent ref_date is selected at revision 0."""
+        df = _make_qcew_revisions(n_months=12, base_year=2020)
+        D = _ref(2021, 1)
+
+        selected = _select_qcew_at_horizon(df, D).sort("ref_date", descending=True)
+        assert selected["revision"][0] == 0
+
+    def test_consecutive_ref_dates(self):
+        """Selected ref_dates are consecutive months."""
+        df = _make_qcew_revisions(n_months=12, base_year=2020)
+        D = _ref(2021, 1)
+        selected = _select_qcew_at_horizon(df, D)
+
+        dates = selected["ref_date"].sort().to_list()
+        for i in range(1, len(dates)):
+            d1, d2 = dates[i - 1], dates[i]
+            month_diff = (d2.year - d1.year) * 12 + d2.month - d1.month
+            assert month_diff == 1, f"Gap: {d1} → {d2}"
+
+    def test_pre2017_keeps_max_revision(self):
+        """Pre-2017 rows get max(revision) per (series, ref_date)."""
+        df = _make_qcew_revisions(n_months=12, base_year=2016)
+        D = _ref(2017, 1)
+        max_rev = {1: 4, 2: 3, 3: 2, 4: 1}
+
+        selected = _select_qcew_at_horizon(df, D)
+        pre = selected.filter(pl.col("ref_date") < date(2017, 1, 12))
+        # One row per ref_date, with max revision for the quarter
+        assert pre["ref_date"].n_unique() == len(pre)
+        for row in pre.iter_rows(named=True):
+            quarter = (row["ref_date"].month - 1) // 3 + 1
+            assert row["revision"] == max_rev[quarter]
+
+    def test_fallback_when_revision_missing(self):
+        """When prescribed revision doesn't exist, fallback picks max available."""
+        df = _make_qcew_revisions(n_months=12, base_year=2020)
+        # Remove revision 1 rows → rank 2 must fallback
+        df_no_rev1 = df.filter(pl.col("revision") != 1)
+        D = _ref(2021, 1)
+
+        selected = _select_qcew_at_horizon(df_no_rev1, D)
+        all_rds = df_no_rev1.filter(pl.col("ref_date") < D)["ref_date"].unique()
+        assert selected["ref_date"].n_unique() == all_rds.n_unique()
+
+    def test_empty_input(self):
+        """Empty DataFrame returns empty."""
+        df = _make_qcew_revisions(n_months=6)
+        empty = df.filter(pl.lit(False))
+        result = _select_qcew_at_horizon(empty, _ref(2021, 1))
+        assert len(result) == 0
+
+
+# ---------------------------------------------------------------------------
+# _validate_censored_selection
+# ---------------------------------------------------------------------------
+
+
+class TestValidateCensoredSelection:
+    """Validation guards catch bad data before the sampler runs."""
+
+    def _good_ces(self) -> pl.DataFrame:
+        """Return a correctly-selected CES DataFrame."""
+        df = _make_ces_triangle(n_months=8)
+        return _select_ces_at_horizon(df, _ref(2024, 9))
+
+    def test_good_data_passes(self):
+        selected = self._good_ces()
+        _validate_censored_selection(
+            selected, "CES", _ref(2024, 9), _CES_SERIES_KEY
+        )
+
+    def test_rejects_duplicate_ref_dates(self):
+        selected = self._good_ces()
+        duped = pl.concat([selected, selected.head(1)])
+        with pytest.raises(ValueError, match="duplicates"):
+            _validate_censored_selection(
+                duped, "CES", _ref(2024, 9), _CES_SERIES_KEY
+            )
+
+    def test_rejects_gap_in_ref_dates(self):
+        selected = self._good_ces()
+        # Remove a middle row to create a gap
+        dates = selected["ref_date"].sort().to_list()
+        mid = dates[len(dates) // 2]
+        gapped = selected.filter(pl.col("ref_date") != mid)
+        with pytest.raises(ValueError, match="gap"):
+            _validate_censored_selection(
+                gapped, "CES", _ref(2024, 9), _CES_SERIES_KEY
+            )
+
+    def test_rejects_null_employment(self):
+        selected = self._good_ces()
+        bad = selected.with_columns(
+            pl.when(pl.col("ref_date") == selected["ref_date"][0])
+            .then(pl.lit(None))
+            .otherwise(pl.col("employment"))
+            .alias("employment")
+        )
+        with pytest.raises(ValueError, match="employment"):
+            _validate_censored_selection(
+                bad, "CES", _ref(2024, 9), _CES_SERIES_KEY
+            )
+
+    def test_rejects_zero_employment(self):
+        selected = self._good_ces()
+        bad = selected.with_columns(
+            pl.when(pl.col("ref_date") == selected["ref_date"][0])
+            .then(pl.lit(0.0))
+            .otherwise(pl.col("employment"))
+            .alias("employment")
+        )
+        with pytest.raises(ValueError, match="employment"):
+            _validate_censored_selection(
+                bad, "CES", _ref(2024, 9), _CES_SERIES_KEY
+            )
+
+    def test_rejects_null_growth(self):
+        selected = self._good_ces()
+        bad = selected.with_columns(
+            pl.when(pl.col("ref_date") == selected["ref_date"][0])
+            .then(pl.lit(None).cast(pl.Float64))
+            .otherwise(pl.col("growth"))
+            .alias("growth")
+        )
+        with pytest.raises(ValueError, match="growth"):
+            _validate_censored_selection(
+                bad, "CES", _ref(2024, 9), _CES_SERIES_KEY
+            )
+
+    def test_empty_passes(self):
+        """Empty DataFrame is fine."""
+        selected = self._good_ces().filter(pl.lit(False))
+        _validate_censored_selection(
+            selected, "CES", _ref(2024, 9), _CES_SERIES_KEY
+        )

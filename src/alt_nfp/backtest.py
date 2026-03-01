@@ -146,10 +146,10 @@ def run_backtest(
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    panel = build_panel()
+    panel_full = build_panel()
 
     # Uncensored "truth" panel for actual values
-    data_full = panel_to_model_data(panel, PROVIDERS)
+    data_full = panel_to_model_data(panel_full, PROVIDERS)
 
     dates = data_full["dates"]
     T = len(dates)
@@ -169,6 +169,7 @@ def run_backtest(
     for run, (t_idx, target_date) in enumerate(zip(target_indices, target_dates)):
         print(f"\n--- Nowcast backtest {run + 1}/{n_backtest}: {target_date} ---")
 
+        panel = build_panel(as_of_ref=target_date)
         data = panel_to_model_data(panel, PROVIDERS, as_of=target_date)
         frontier = _vintage_frontier(data)
         _print_frontier(frontier, target_date)

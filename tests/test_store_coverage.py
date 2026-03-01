@@ -15,7 +15,7 @@ import polars as pl
 import pytest
 
 from alt_nfp.config import STORE_DIR
-from alt_nfp.ingest.vintage_store import read_vintage_store
+from alt_nfp.ingest.vintage_store import read_vintage_store, transform_to_panel
 from alt_nfp.lookups.industry import (
     INDUSTRY_MAP,
     SINGLE_SECTOR_SUPERSECTORS,
@@ -407,72 +407,100 @@ class TestCesRevisionCoverage:
 
 
 class TestCesCensoredSeriesInvariant:
-    """CES censored at any as_of has 1 rev-0, 1 rev-1, rest rev-2 per series."""
+    """CES censored via combined vintage_date + rank-based selection has
+    1 rev-0, 1 rev-1, rest rev-2 per series with consecutive ref_dates.
+    """
+
+    @staticmethod
+    def _check_panel_diagonal(
+        panel: pl.DataFrame, source: str, label: str, as_of_ref: date,
+    ) -> list[str]:
+        """Verify the triangular diagonal invariant on a censored panel."""
+        sub = panel.filter(pl.col("source") == source)
+        if sub.is_empty():
+            return []
+
+        series_key = ["geographic_type", "geographic_code", "industry_level", "industry_code"]
+        gaps: list[str] = []
+
+        for key_vals, grp in sub.group_by(series_key):
+            # One row per period
+            if grp["period"].n_unique() != len(grp):
+                key = key_vals if isinstance(key_vals, tuple) else (key_vals,)
+                gaps.append(f"{label} {as_of_ref} {key}: duplicate periods")
+                continue
+
+            rev_nums = grp["revision_number"]
+            n0 = (rev_nums == 0).sum()
+            n1 = (rev_nums == 1).sum()
+            n = len(grp)
+
+            if n0 != 1 or n1 != 1:
+                key = key_vals if isinstance(key_vals, tuple) else (key_vals,)
+                gaps.append(
+                    f"{label} {as_of_ref} {key}: revision_number counts "
+                    f"(0,1)=({n0},{n1}) expected (1,1)"
+                )
+                continue
+
+            # Consecutive months
+            months = grp["period"].sort()
+            yms = months.dt.year() * 12 + months.dt.month()
+            diffs = yms.diff().drop_nulls()
+            if (diffs != 1).any():
+                key = key_vals if isinstance(key_vals, tuple) else (key_vals,)
+                gaps.append(f"{label} {as_of_ref} {key}: periods not consecutive")
+
+        return gaps
+
+    @staticmethod
+    def _sample_as_of_dates() -> list[date]:
+        """Pick as_of_ref dates (YYYY-MM-12) spread across the store window."""
+        # Use ref_dates from the store to find a valid range
+        df = _load_store("ces", seasonally_adjusted=True)
+        min_ref = _offset_ref_date(VINTAGE_CUTOFF, 12)
+        max_vdate = df["vintage_date"].max()
+        max_ref = _offset_ref_date(max_vdate, -4)
+        if min_ref >= max_ref:
+            return []
+
+        # Build candidate dates at day=12 stepping by ~3 months
+        candidates: list[date] = []
+        cursor = min_ref
+        while cursor <= max_ref:
+            # Skip Feb/Mar benchmark window
+            if cursor.month not in (2, 3):
+                candidates.append(cursor)
+            cursor = _offset_ref_date(cursor, 1)
+
+        if not candidates:
+            return []
+
+        step = max(1, len(candidates) // 8)
+        return candidates[::step][:8]
 
     def test_ces_sa(self) -> None:
-        df = _load_store("ces", seasonally_adjusted=True)
-        min_as_of = _offset_ref_date(VINTAGE_CUTOFF, 12)  # safe start: full diagonal in store
-        max_vdate = df["vintage_date"].max()
-        max_as_of = _offset_ref_date(max_vdate, -4)  # safe end: frontier has rev-0, prev has rev-1
-        if min_as_of >= max_as_of:
+        as_of_dates = self._sample_as_of_dates()
+        if not as_of_dates:
             pytest.skip("Store range too short for censored invariant window")
-        candidates = (
-            df.filter(
-                (pl.col("vintage_date") >= min_as_of)
-                & (pl.col("vintage_date") <= max_as_of)
-            )
-            .select("vintage_date")
-            .unique()
-            .filter(
-                (pl.col("vintage_date").dt.month() != 2)
-                & (pl.col("vintage_date").dt.month() != 3)
-            )
-            .sort("vintage_date")
-        )
-        if candidates.is_empty():
-            pytest.skip("No non-February/March vintage_dates in safe window")
-        vdates = candidates["vintage_date"].to_list()
-        lo = len(vdates) // 4
-        hi = (3 * len(vdates)) // 4
-        mid_slice = vdates[lo:hi]
-        step = max(1, len(mid_slice) // 6)
-        as_of_dates = mid_slice[::step][:8]
+
+        lf = read_vintage_store(source="ces", seasonally_adjusted=True)
         gaps: list[str] = []
-        for as_of in as_of_dates:
-            gaps.extend(_check_ces_censored_invariant(df, as_of, "ces_sa"))
+        for as_of_ref in as_of_dates:
+            panel = transform_to_panel(lf, geographic_scope="national", as_of_ref=as_of_ref)
+            gaps.extend(self._check_panel_diagonal(panel, "ces_sa", "ces_sa", as_of_ref))
         assert not gaps, "\n".join(gaps)
 
     def test_ces_nsa(self) -> None:
-        df = _load_store("ces", seasonally_adjusted=False)
-        min_as_of = _offset_ref_date(VINTAGE_CUTOFF, 12)
-        max_vdate = df["vintage_date"].max()
-        max_as_of = _offset_ref_date(max_vdate, -4)
-        if min_as_of >= max_as_of:
+        as_of_dates = self._sample_as_of_dates()
+        if not as_of_dates:
             pytest.skip("Store range too short for censored invariant window")
-        candidates = (
-            df.filter(
-                (pl.col("vintage_date") >= min_as_of)
-                & (pl.col("vintage_date") <= max_as_of)
-            )
-            .select("vintage_date")
-            .unique()
-            .filter(
-                (pl.col("vintage_date").dt.month() != 2)
-                & (pl.col("vintage_date").dt.month() != 3)
-            )
-            .sort("vintage_date")
-        )
-        if candidates.is_empty():
-            pytest.skip("No non-February/March vintage_dates in safe window")
-        vdates = candidates["vintage_date"].to_list()
-        lo = len(vdates) // 4
-        hi = (3 * len(vdates)) // 4
-        mid_slice = vdates[lo:hi]
-        step = max(1, len(mid_slice) // 6)
-        as_of_dates = mid_slice[::step][:8]
-        gaps = []
-        for as_of in as_of_dates:
-            gaps.extend(_check_ces_censored_invariant(df, as_of, "ces_nsa"))
+
+        lf = read_vintage_store(source="ces", seasonally_adjusted=False)
+        gaps: list[str] = []
+        for as_of_ref in as_of_dates:
+            panel = transform_to_panel(lf, geographic_scope="national", as_of_ref=as_of_ref)
+            gaps.extend(self._check_panel_diagonal(panel, "ces_nsa", "ces_nsa", as_of_ref))
         assert not gaps, "\n".join(gaps)
 
 

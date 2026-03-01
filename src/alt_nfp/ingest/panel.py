@@ -27,6 +27,7 @@ def build_panel(
     providers: list[ProviderConfig] | None = None,
     start_year: int = 2003,
     end_year: int | None = None,
+    as_of_ref: date | None = None,
 ) -> pl.DataFrame:
     """Build a unified observation panel from vintage store and providers.
 
@@ -41,6 +42,11 @@ def build_panel(
         First year for data (default 2003).
     end_year : int, optional
         Last year for data. Defaults to current year.
+    as_of_ref : date, optional
+        When set, apply rank-based censoring so the panel contains only
+        the data available at horizon *as_of_ref* (``YYYY-MM-12``).
+        CES and QCEW rows are selected via the triangular diagonal rules
+        and ``vintage_date <= as_of_ref``.
 
     Returns
     -------
@@ -63,7 +69,9 @@ def build_panel(
             store_path=store_path,
             ref_date_range=(start_ref, end_ref),
         )
-        vintage_df = transform_to_panel(lf, geographic_scope='national')
+        vintage_df = transform_to_panel(
+            lf, geographic_scope='national', as_of_ref=as_of_ref
+        )
         if len(vintage_df) > 0:
             parts.append(vintage_df)
             logger.info('Panel built from vintage store (%d rows)', len(vintage_df))
