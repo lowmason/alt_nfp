@@ -106,13 +106,41 @@ def plot_residuals(idata: az.InferenceData, data: dict) -> None:
     ax = axes[-1]
     idx_obs = data["qcew_obs"]
     pred = g_total_nsa[idx_obs]
-    qcew_sigma = np.where(data["qcew_is_m3"], 0.0005, 0.0015)
+    qcew_is_m2 = (
+        np.asarray(data["qcew_is_m2"])
+        if "qcew_is_m2" in data
+        else np.zeros(len(idx_obs), dtype=bool)
+    )
+    if "sigma_qcew_mid" in idata.posterior and "qcew_noise_mult" in data:
+        sigma_mid = float(idata.posterior["sigma_qcew_mid"].values.flatten().mean())
+        sigma_boundary = float(
+            idata.posterior["sigma_qcew_boundary"].values.flatten().mean()
+        )
+        qcew_noise_mult = np.asarray(data["qcew_noise_mult"], dtype=float)
+        qcew_sigma = np.where(
+            qcew_is_m2,
+            sigma_mid * qcew_noise_mult,
+            sigma_boundary * qcew_noise_mult,
+        )
+    else:
+        qcew_sigma = np.full(len(idx_obs), 0.001)
     resid = (data["g_qcew"][idx_obs] - pred) / qcew_sigma
-    m3 = data["qcew_is_m3"]
-    ax.scatter(dates_arr[idx_obs][m3], resid[m3], s=12, c="darkred", alpha=0.7,
-               label="M3 (quarter-end)")
-    ax.scatter(dates_arr[idx_obs][~m3], resid[~m3], s=12, c="salmon", alpha=0.7,
-               label="M1-2 (retrospective UI)")
+    ax.scatter(
+        dates_arr[idx_obs][qcew_is_m2],
+        resid[qcew_is_m2],
+        s=12,
+        c="darkred",
+        alpha=0.7,
+        label="M2 (mid-quarter)",
+    )
+    ax.scatter(
+        dates_arr[idx_obs][~qcew_is_m2],
+        resid[~qcew_is_m2],
+        s=12,
+        c="salmon",
+        alpha=0.7,
+        label="M3+M1 (boundary)",
+    )
     _resid_lines(ax, "QCEW")
     ax.legend(fontsize=7)
     ax.xaxis.set_major_locator(mdates.YearLocator())

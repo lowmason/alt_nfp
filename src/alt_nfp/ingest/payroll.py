@@ -8,6 +8,10 @@ Loads payroll provider parquet files with a standard multi-dimensional schema::
 Filters to the slice specified by :class:`~alt_nfp.config.ProviderConfig`
 and produces flat ``(ref_date, employment[, birth_rate])`` time series for
 the model pipeline, as well as PANEL_SCHEMA rows for the observation panel.
+
+Cell-level provider parquets (``geographic_type='region'``) are routed
+through :mod:`~alt_nfp.ingest.compositing` for QCEW-weighted national
+compositing before entering the standard pipeline.
 """
 
 from __future__ import annotations
@@ -19,10 +23,34 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from ..config import DATA_DIR, ProviderConfig
+from ..config import DATA_DIR, MIN_PSEUDO_ESTABS_PER_CELL, STORE_DIR, ProviderConfig
 from .base import PANEL_SCHEMA, empty_panel
 
 logger = logging.getLogger(__name__)
+
+
+def _is_cell_level(raw: pl.DataFrame) -> bool:
+    """Return True if the provider DataFrame contains cell-level data."""
+    if "geographic_type" not in raw.columns:
+        return False
+    return "region" in raw["geographic_type"].unique().to_list()
+
+
+def _join_birth_file(series_df: pl.DataFrame, birth_path: Path) -> pl.DataFrame:
+    """Left-join a separate birth-rate parquet onto the provider series."""
+    if not birth_path.exists():
+        logger.warning("Birth-rate file not found: %s", birth_path)
+        return series_df
+    try:
+        bdf = pl.read_parquet(str(birth_path))
+    except Exception as exc:
+        logger.warning("Failed to read birth-rate file %s: %s", birth_path, exc)
+        return series_df
+    if "birth_rate" not in bdf.columns or "ref_date" not in bdf.columns:
+        logger.warning("birth_rate or ref_date column missing in %s", birth_path)
+        return series_df
+    births = bdf.select(["ref_date", "birth_rate"]).drop_nulls()
+    return series_df.join(births, on="ref_date", how="left")
 
 
 def read_provider_table(fpath: Path) -> pl.DataFrame | None:
@@ -50,6 +78,9 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
     DataFrame with columns ``ref_date``, ``employment``, and optionally
     ``birth_rate`` (if present in the source file).
 
+    For cell-level providers (``geographic_type='region'``), QCEW-weighted
+    compositing produces a synthetic national employment level.
+
     Returns ``None`` if the file is missing or the filtered result is empty.
     """
     fpath = DATA_DIR / config.file
@@ -62,28 +93,45 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
         logger.warning("Column 'employment' not found in %s. Available: %s", fpath, raw.columns)
         return None
 
-    filter_cols = {
-        "geography_type": config.geography_type,
-        "geography_code": config.geography_code,
-        "industry_type": config.industry_type,
-        "industry_code": config.industry_code,
-    }
-    mask = pl.lit(True)
-    for col, val in filter_cols.items():
-        if col in raw.columns:
-            mask = mask & (pl.col(col) == val)
+    if _is_cell_level(raw):
+        from .compositing import compute_provider_composite
 
-    filtered = raw.filter(mask).sort("ref_date")
-    if len(filtered) == 0:
-        logger.warning(
-            "No rows after filtering %s with %s", fpath, filter_cols
+        composite_df, _ = compute_provider_composite(
+            raw, STORE_DIR, MIN_PSEUDO_ESTABS_PER_CELL,
         )
-        return None
+        if composite_df.is_empty():
+            logger.warning("Compositing produced no rows for %s", fpath)
+            return None
+        result = composite_df.select(["ref_date", "employment"])
+    else:
+        filter_cols = {
+            "geography_type": config.geography_type,
+            "geography_code": config.geography_code,
+            "industry_type": config.industry_type,
+            "industry_code": config.industry_code,
+        }
+        mask = pl.lit(True)
+        for col, val in filter_cols.items():
+            if col in raw.columns:
+                mask = mask & (pl.col(col) == val)
 
-    keep = ["ref_date", "employment"]
-    if "birth_rate" in filtered.columns:
-        keep.append("birth_rate")
-    return filtered.select(keep).drop_nulls(subset=["ref_date", "employment"])
+        filtered = raw.filter(mask).sort("ref_date")
+        if len(filtered) == 0:
+            logger.warning(
+                "No rows after filtering %s with %s", fpath, filter_cols
+            )
+            return None
+
+        keep = ["ref_date", "employment"]
+        if "birth_rate" in filtered.columns:
+            keep.append("birth_rate")
+        result = filtered.select(keep).drop_nulls(subset=["ref_date", "employment"])
+
+    # Join birth rates from a separate file if configured.
+    if config.birth_file is not None and "birth_rate" not in result.columns:
+        result = _join_birth_file(result, DATA_DIR / config.birth_file)
+
+    return result
 
 
 def ingest_provider(
@@ -124,18 +172,28 @@ def ingest_provider(
         )
         return empty_panel()
 
-    filter_cols = {
-        "geography_type": config.geography_type,
-        "geography_code": config.geography_code,
-        "industry_type": config.industry_type,
-        "industry_code": config.industry_code,
-    }
-    mask = pl.lit(True)
-    for col, val in filter_cols.items():
-        if col in raw.columns:
-            mask = mask & (pl.col(col) == val)
+    if _is_cell_level(raw):
+        from .compositing import compute_provider_composite
 
-    raw = raw.filter(mask).sort("ref_date")
+        composite_df, _ = compute_provider_composite(
+            raw, STORE_DIR, MIN_PSEUDO_ESTABS_PER_CELL,
+        )
+        if composite_df.is_empty():
+            return empty_panel()
+        raw = composite_df.sort("ref_date")
+    else:
+        filter_cols = {
+            "geography_type": config.geography_type,
+            "geography_code": config.geography_code,
+            "industry_type": config.industry_type,
+            "industry_code": config.industry_code,
+        }
+        mask = pl.lit(True)
+        for col, val in filter_cols.items():
+            if col in raw.columns:
+                mask = mask & (pl.col(col) == val)
+        raw = raw.filter(mask).sort("ref_date")
+
     raw = raw.select(["ref_date", "employment"]).drop_nulls()
 
     if len(raw) < 2:

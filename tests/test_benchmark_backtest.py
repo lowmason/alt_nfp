@@ -410,3 +410,130 @@ class TestAsOfCensoring:
         assert len(early["ces_sa_obs"]) <= len(late["ces_sa_obs"])
         # QCEW
         assert len(early["qcew_obs"]) <= len(late["qcew_obs"])
+
+    def test_later_as_of_all_sources_weakly_more(self):
+        """Later as_of should yield weakly more observations for CES, QCEW,
+        and weakly fewer zero-valued cyclical indicator entries."""
+        from alt_nfp.config import CYCLICAL_INDICATORS
+        from alt_nfp.panel_adapter import panel_to_model_data
+
+        panel = self._make_panel(36)
+        early = panel_to_model_data(panel, [], as_of=date(2024, 1, 15))
+        late = panel_to_model_data(panel, [], as_of=date(2025, 6, 15))
+
+        assert len(early["ces_sa_obs"]) <= len(late["ces_sa_obs"]), "CES SA"
+        assert len(early["qcew_obs"]) <= len(late["qcew_obs"]), "QCEW"
+
+        for spec in CYCLICAL_INDICATORS:
+            key = f"{spec['name']}_c"
+            e_arr = early.get(key)
+            l_arr = late.get(key)
+            if e_arr is None or l_arr is None:
+                continue
+            e_nonzero = int(np.sum(e_arr != 0.0))
+            l_nonzero = int(np.sum(l_arr != 0.0))
+            assert e_nonzero <= l_nonzero, (
+                f"{key}: later as_of should have >= non-zero entries "
+                f"({e_nonzero} vs {l_nonzero})"
+            )
+
+
+@pytest.mark.slow
+class TestAsOfTighterPosteriors:
+    """Model-level smoke test: later as_of should produce tighter posteriors.
+
+    Requires MCMC sampling so is slow (~1 min).  Run with ``pytest -m slow``.
+    """
+
+    def _make_panel(self, n_months: int = 36) -> pl.DataFrame:
+        """Reuse the same synthetic panel builder as TestAsOfCensoring."""
+        from alt_nfp.ingest.base import PANEL_SCHEMA
+
+        base = date(2023, 1, 1)
+        rows: list[dict] = []
+        for i in range(n_months):
+            m = base.month + i
+            year = base.year + (m - 1) // 12
+            month = ((m - 1) % 12) + 1
+            period = date(year, month, 1)
+            ces_pub = date(year + (month // 12), (month % 12) + 1, 7)
+            rows.append({
+                "period": period,
+                "geographic_type": "national",
+                "geographic_code": "US",
+                "industry_code": "00",
+                "industry_level": "national",
+                "source": "ces_sa",
+                "source_type": "official_sa",
+                "growth": 0.001 * (1 + 0.1 * np.sin(i)),
+                "employment_level": 150_000.0 + i * 100,
+                "is_seasonally_adjusted": True,
+                "vintage_date": ces_pub,
+                "revision_number": 0,
+                "is_final": False,
+                "publication_lag_months": 1,
+                "coverage_ratio": 1.0,
+            })
+            q = (month - 1) // 3 + 1
+            q_end_month = q * 3
+            pub_offset = 5
+            qcew_pub_month = q_end_month + pub_offset
+            qcew_pub_year = year + (qcew_pub_month - 1) // 12
+            qcew_pub_month = ((qcew_pub_month - 1) % 12) + 1
+            qcew_pub = date(qcew_pub_year, qcew_pub_month, 15)
+            rows.append({
+                "period": period,
+                "geographic_type": "national",
+                "geographic_code": "US",
+                "industry_code": "00",
+                "industry_level": "national",
+                "source": "qcew",
+                "source_type": "census",
+                "growth": 0.0008 * (1 + 0.05 * np.sin(i)),
+                "employment_level": 150_000.0 + i * 100,
+                "is_seasonally_adjusted": False,
+                "vintage_date": qcew_pub,
+                "revision_number": 0,
+                "is_final": True,
+                "publication_lag_months": 5,
+                "coverage_ratio": 1.0,
+            })
+        return pl.DataFrame(rows, schema=PANEL_SCHEMA)
+
+    def test_later_as_of_reduces_posterior_variance(self):
+        """Posterior std of g_cont should be smaller (or equal) with more data."""
+        from alt_nfp.model import build_model
+        from alt_nfp.panel_adapter import panel_to_model_data
+        from alt_nfp.sampling import sample_model
+
+        panel = self._make_panel(36)
+        data_early = panel_to_model_data(panel, [], as_of=date(2024, 6, 15))
+        data_late = panel_to_model_data(panel, [], as_of=date(2025, 12, 15))
+
+        minimal_kwargs = dict(
+            draws=200, tune=100, chains=2,
+            target_accept=0.90, return_inferencedata=True,
+        )
+
+        model_early = build_model(data_early)
+        idata_early = sample_model(model_early, sampler_kwargs=minimal_kwargs)
+
+        model_late = build_model(data_late)
+        idata_late = sample_model(model_late, sampler_kwargs=minimal_kwargs)
+
+        # Compare posterior std of g_cont at a shared time index
+        # (use an index in the middle of the overlapping window)
+        T_shared = min(data_early["T"], data_late["T"])
+        mid = T_shared // 2
+
+        std_early = float(
+            idata_early.posterior["g_cont"].values[:, :, mid].std()
+        )
+        std_late = float(
+            idata_late.posterior["g_cont"].values[:, :, mid].std()
+        )
+
+        assert std_late <= std_early * 1.1, (
+            f"Later as_of should give tighter posteriors at t={mid}: "
+            f"std_early={std_early:.6f}, std_late={std_late:.6f}"
+        )

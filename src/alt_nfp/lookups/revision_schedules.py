@@ -116,27 +116,30 @@ class RevisionSpec:
 # This asymmetry arises from the annual file structure: each annual
 # QCEW release revises all quarters of its reference year, so earlier
 # quarters accumulate more revision opportunities.
+#
+# noise_multiplier: empirical recalibration (2017+, excl 2020-2021).
+# Q1 (January-heavy) has large revision RMSE through rev 3; Q2-Q4 follow M3 ratios.
 QCEW_REVISIONS: dict[str, list[RevisionSpec]] = {
     'Q1': [
-        RevisionSpec(revision_number=0, lag_months=5, noise_multiplier=2.0),
-        RevisionSpec(revision_number=1, lag_months=8, noise_multiplier=1.6),
-        RevisionSpec(revision_number=2, lag_months=14, noise_multiplier=1.3),
-        RevisionSpec(revision_number=3, lag_months=20, noise_multiplier=1.1),
+        RevisionSpec(revision_number=0, lag_months=5, noise_multiplier=25.0),
+        RevisionSpec(revision_number=1, lag_months=8, noise_multiplier=20.0),
+        RevisionSpec(revision_number=2, lag_months=14, noise_multiplier=15.0),
+        RevisionSpec(revision_number=3, lag_months=20, noise_multiplier=5.0),
         RevisionSpec(revision_number=4, lag_months=26, noise_multiplier=1.0),
     ],
     'Q2': [
-        RevisionSpec(revision_number=0, lag_months=5, noise_multiplier=2.0),
-        RevisionSpec(revision_number=1, lag_months=11, noise_multiplier=1.5),
+        RevisionSpec(revision_number=0, lag_months=5, noise_multiplier=17.0),
+        RevisionSpec(revision_number=1, lag_months=11, noise_multiplier=4.0),
         RevisionSpec(revision_number=2, lag_months=17, noise_multiplier=1.2),
         RevisionSpec(revision_number=3, lag_months=23, noise_multiplier=1.0),
     ],
     'Q3': [
-        RevisionSpec(revision_number=0, lag_months=5, noise_multiplier=2.0),
-        RevisionSpec(revision_number=1, lag_months=14, noise_multiplier=1.4),
+        RevisionSpec(revision_number=0, lag_months=5, noise_multiplier=17.0),
+        RevisionSpec(revision_number=1, lag_months=14, noise_multiplier=4.0),
         RevisionSpec(revision_number=2, lag_months=20, noise_multiplier=1.0),
     ],
     'Q4': [
-        RevisionSpec(revision_number=0, lag_months=8, noise_multiplier=1.5),
+        RevisionSpec(revision_number=0, lag_months=8, noise_multiplier=17.0),
         RevisionSpec(revision_number=1, lag_months=17, noise_multiplier=1.0),
     ],
 }

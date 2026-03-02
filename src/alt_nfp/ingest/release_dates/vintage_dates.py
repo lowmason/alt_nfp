@@ -27,6 +27,21 @@ CES_MONTHLY_REVISIONS = [0, 1, 2]
 # with first-Friday estimates via _generate_ces_pre_scrape_dates().
 _CES_SCRAPE_START_YEAR = 2008
 
+# Earliest QCEW ref_date present in the BLS archive scrape (Q3 2007).
+# Quarters before this are filled via _generate_qcew_pre_scrape_dates().
+_QCEW_SCRAPE_START = date(2007, 9, 12)
+
+# QCEW initial-publication lag (months after quarter-end month).
+# BLS accelerated the QCEW schedule around 2016; before that,
+# publication lagged ~7 months after the reference quarter.
+_QCEW_MODERN_PUBLICATION_LAG: dict[int, int] = {
+    3: 5,   # Q1 — modern schedule (2016+)
+    6: 5,   # Q2
+    9: 5,   # Q3
+    12: 6,  # Q4 + annual
+}
+_QCEW_HISTORICAL_PUBLICATION_LAG = 7  # months, pre-2016
+
 # CES Oct 2025: released with Nov 2025 (government shutdown).
 CES_OCT_2025_RELEASED_WITH_NOV_REF = date(2025, 10, 12)
 CES_NOV_2025_REF = date(2025, 11, 12)
@@ -97,6 +112,41 @@ def _generate_ces_pre_scrape_dates() -> list[tuple[str, date, date]]:
             ref = date(year, month, 12)
             pub = _ces_publication_date(year, month)
             rows.append(('ces', ref, pub))
+    return rows
+
+
+def _qcew_publication_date(ref_year: int, quarter_end_month: int) -> date:
+    """Estimate the QCEW initial publication date for a reference quarter.
+
+    Returns the 1st of the month that is *lag* months after the
+    quarter-end month, using the modern (post-2016) schedule.
+    """
+    lag = _QCEW_MODERN_PUBLICATION_LAG[quarter_end_month]
+    total = quarter_end_month + lag
+    pub_year = ref_year + (total - 1) // 12
+    pub_month = ((total - 1) % 12) + 1
+    return date(pub_year, pub_month, 1)
+
+
+def _generate_qcew_pre_scrape_dates() -> list[tuple[str, date, date]]:
+    """Generate (publication, ref_date, vintage_date) for QCEW quarters before
+    the BLS archive scrape coverage (2003-Q1 through 2007-Q2).
+
+    Uses the historical 7-month publication lag (BLS did not accelerate
+    the QCEW schedule until ~2016).
+    """
+    rows: list[tuple[str, date, date]] = []
+    lag = _QCEW_HISTORICAL_PUBLICATION_LAG
+    for year in range(2003, _QCEW_SCRAPE_START.year + 1):
+        for qm in (3, 6, 9, 12):
+            ref = date(year, qm, 12)
+            if ref >= _QCEW_SCRAPE_START:
+                break
+            total = qm + lag
+            pub_year = year + (total - 1) // 12
+            pub_month = ((total - 1) % 12) + 1
+            pub = date(pub_year, pub_month, 1)
+            rows.append(('qcew', ref, pub))
     return rows
 
 
@@ -300,7 +350,11 @@ def build_vintage_dates(release_dates_path: Path | None = None) -> pl.DataFrame:
     df = pl.read_parquet(path)
 
     # Merge supplemental + pre-scrape release dates for gaps
-    all_supplemental = SUPPLEMENTAL_RELEASE_DATES + _generate_ces_pre_scrape_dates()
+    all_supplemental = (
+        SUPPLEMENTAL_RELEASE_DATES
+        + _generate_ces_pre_scrape_dates()
+        + _generate_qcew_pre_scrape_dates()
+    )
     supplemental = pl.DataFrame(
         [
             {'publication': p, 'ref_date': ref, 'vintage_date': vint}

@@ -65,11 +65,11 @@ alt_nfp/
 ├── alt_nfp_estimation_v3.py  # Thin runner script for the full pipeline
 ├── src/alt_nfp/              # Core Python package
 │   ├── __init__.py           # Package exports
-│   ├── config.py             # ProviderConfig, PROVIDERS list, paths, cyclical indicators, era breaks
+│   ├── config.py             # ProviderConfig (incl. birth_file), PROVIDERS list, paths, cyclical indicators, era breaks, MIN_PSEUDO_ESTABS_PER_CELL
 │   ├── panel_adapter.py      # Panel → model data dict, cyclical indicators, as-of censoring
 │   ├── model.py              # PyMC model definition
 │   ├── sampling.py           # sample_model() — nutpie/PyMC with preset configs
-│   ├── diagnostics.py        # Parameter summary, precision budget, divergences
+│   ├── diagnostics.py        # Parameter summary, precision budget, divergences, weight staleness
 │   ├── checks.py             # Prior/posterior predictive checks, LOO-CV, era summary
 │   ├── residuals.py          # Standardised residuals by source
 │   ├── plots.py              # Growth/seasonal, reconstructed index, BD diagnostics
@@ -93,7 +93,8 @@ alt_nfp/
 │   │   ├── ces_national.py   # CES national-level ingestion
 │   │   ├── ces_state.py      # CES state-level ingestion
 │   │   ├── qcew.py           # QCEW ingestion
-│   │   ├── payroll.py        # Provider index ingestion
+│   │   ├── compositing.py    # QCEW-weighted national compositing for cell-level providers
+│   │   ├── payroll.py        # Provider index ingestion (auto-detects cell-level → compositing)
 │   │   ├── panel.py          # build_panel, save/load
 │   │   ├── aggregate.py      # Data aggregation utilities
 │   │   ├── releases.py       # Release management
@@ -135,8 +136,9 @@ alt_nfp/
 │   │   ├── biz_apps.parquet  #   (ref_date, value) — Census BFS applications
 │   │   └── jolts.parquet     #   (ref_date, value) — JOLTS job openings
 │   ├── providers/            # Payroll provider data (one dir per provider)
-│   │   └── G/g_provider.parquet    # Same schema as vintage_store minus
-│   │                               #   revision, benchmark_revision, vintage_date
+│   │   └── g/
+│   │       ├── g_provider.parquet  # Cell-level (region × supersector) employment
+│   │       └── g_births.parquet    # National-level birth rates (separate file)
 │   ├── downloads/            # Raw inputs fetched from external sources
 │   │   ├── ces/cesvinall/    # CES triangular revision CSVs
 │   │   ├── qcew/             # QCEW bulk + revisions CSV
@@ -163,6 +165,7 @@ alt_nfp/
 │   ├── test_fred.py                  # FRED client, indicator store download/read tests
 │   ├── test_precision_budget.py      # Precision budget DataFrame structure tests
 │   ├── test_sensitivity_smoke.py     # Sensitivity analysis smoke tests
+│   ├── test_compositing.py          # QCEW-weighted compositing: weights, redistribution, composite, integration
 │   ├── test_model.py                # Model construction tests (era-specific + scalar fallback)
 │   ├── test_store_coverage.py       # Store data-integrity tests + CES censored diagonal invariant
 │   └── ingest/bls/           # BLS API client tests
@@ -172,7 +175,8 @@ alt_nfp/
 ├── scripts/                  # One-off build/maintenance scripts
 │   └── benchmark_diagnostic.py       # Benchmark revision diagnostic runner
 ├── specs/                    # Design specifications
-│   └── vintage_pipeline_spec.md
+│   ├── vintage_pipeline_spec.md
+│   └── provider_spec.md      # Provider representativeness correction spec (v2)
 ├── archive/                  # Earlier monolithic scripts (v1, v2), old todos
 ├── output/                   # Generated results (InferenceData, plots)
 ├── pyproject.toml            # Project config, dependencies, tool settings
@@ -188,14 +192,15 @@ alt_nfp/
 
 ## Key Code Patterns
 
-- **Config-driven providers**: adding a new payroll provider requires only a new `ProviderConfig` entry in `config.py`; data loading, model likelihood, diagnostics, plots, and forecasts adapt automatically.
+- **Config-driven providers**: adding a new payroll provider requires only a new `ProviderConfig` entry in `config.py`; data loading, model likelihood, diagnostics, plots, and forecasts adapt automatically. Providers can be **national** (pre-aggregated) or **cell-level** (supersector × Census region); the loader auto-detects cell-level data and routes through QCEW-weighted compositing. `ProviderConfig.birth_file` allows birth-rate data at a different geographic/industry level from the main employment file (e.g. national birth rates alongside cell-level employment). Currently one active provider: `G` (cell-level with separate national birth rates).
 - **Era-specific latent state parameters** (`config.N_ERAS`, `config.ERA_BREAKS`): the AR(1) latent growth process uses era-indexed `mu_g_era` and `phi_raw_era` (Pre-GFC / Post-GFC / Post-COVID) when `era_idx` is present in the data dict (always, since `panel_to_model_data()` computes it). Gated in `build_model()` so removing `era_idx` from the data dict recovers the original scalar `mu_g`/`phi` baseline. The `pytensor.scan` passes per-timestep `mu_g[t]` and `phi[t]` as sequences; at era boundaries the dynamics parameters switch discretely while the latent state carries forward continuously. `phi_raw_era ~ Beta(18, 2)` (mode ≈ 0.94) replaces the scalar `Uniform(0, 0.99)`. `print_era_summary()` in `checks.py` reports per-era posteriors. `forecast.py` uses the last era (Post-COVID) for forward simulation.
 - **Structural birth/death model**: `bd_t = φ₀ + φ₁·X^birth + φ₂·BD^QCEW_{t-L} + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, nfci, biz_apps, jolts]` (centered cyclical indicators). `φ₁` and `φ₂` are gated out of the model graph when their covariates are all-zero (e.g. in backtest iterations where BD data is unavailable), avoiding unidentified parameters and divergences. Same pattern as `φ₃` / cyclical indicators.
 - **Cyclical indicators** (`config.CYCLICAL_INDICATORS`): claims (weekly, FRED `ICNSA`), NFCI (weekly, FRED `NFCI`), business applications (monthly, FRED `BABATOTALSAUS`), JOLTS openings (monthly, FRED `JTSJOL`). Downloaded from FRED via `ingest/fred.py` into `data/indicators/<name>.parquet` (uniform `ref_date, value` schema). `_load_cyclical_indicators()` in `panel_adapter.py` reads parquet, aggregates weekly→monthly, joins to the model calendar via month-truncated keys (panel dates use day=12 BLS convention, indicators use day=1), and centers. Each has a publication lag in `panel_adapter._CYCLICAL_PUBLICATION_LAGS` used for as-of censoring. The model derives `cyclical_keys` dynamically from `CYCLICAL_INDICATORS` so new indicators are automatically picked up.
+- **QCEW-weighted provider compositing** (`ingest/compositing.py`): cell-level provider parquets (schema: `geographic_type, geographic_code, industry_type, industry_code, ref_date, n_pseudo_estabs, employment`) are composited into a single national growth series. The canonical cell grid is 4 Census regions × 11 BLS supersectors (10, 20, 30, 40, 50, 55, 60, 65, 70, 80, 90) = 44 cells. `load_qcew_weights()` reads region × supersector employment from the vintage store (latest vintage per cell), computes shares summing to 1.0, and carries forward the last available QCEW weights for months beyond the QCEW publication frontier (tracked via `weight_staleness_months`). `redistribute_weights()` reallocates weight from uncovered cells: same supersector first, then same region, then uniform. `compute_provider_composite()` computes cell-level log-difference growth, applies `MIN_PSEUDO_ESTABS_PER_CELL` filtering, redistributes weights, and returns a synthetic national employment level (base=100) that feeds into the existing provider pipeline. `payroll.py` detects cell-level data via `_is_cell_level()` (checks `geographic_type='region'`) in both `load_provider_series()` and `ingest_provider()`. `diagnostics.print_weight_staleness()` reports per-provider staleness summary.
 - **Provider-specific error structures**: each provider can have `iid` or `ar1` measurement error.
 - `alt_nfp_estimation_v3.py` is a thin runner: `build_panel()` → `panel_to_model_data()` → `build_model()` → prior checks → sampling → diagnostics → PPC → LOO → plots → forecast → save.
-- **Data pipeline**: `build_panel()` (`ingest/panel.py`) reads the vintage store (`data/store/`) + provider parquet files (`data/providers/`) → `panel_to_model_data()` (`panel_adapter.py`) converts the panel to model arrays (growth rates, BD covariates, cyclical indicators). Provider files share the vintage store schema but omit `revision`, `benchmark_revision`, and `vintage_date` (no vintages for provider data; `ref_date` determines currency). `build_panel(as_of_ref=D)` activates rank-based horizon censoring for CES/QCEW (see below).
-- **Rank-based horizon censoring** (`vintage_store.py`): `transform_to_panel(lf, as_of_ref=D)` applies two-layer censoring: (1) `vintage_date <= D` + `ref_date < D` filtering prevents lookahead; (2) rank-based selection picks the correct revision per recency rank. CES uses `_select_ces_at_horizon`: rank 1→rev-0, rank 2→rev-1, rank 3+→rev-2 (with `max(benchmark_revision)` for older periods), producing the triangular diagonal invariant. QCEW uses `_select_qcew_at_horizon`: quarter-dependent revision rules matching BLS publication schedule (`_QCEW_MAX_REVISION = {Q1: 4, Q2: 3, Q3: 2, Q4: 1}`). Both helpers have fallback logic when prescribed revisions don't exist at the data frontier. `_validate_censored_selection` runs fail-fast checks (no duplicate ref_dates, consecutive months, no null/zero employment/growth, row count sanity) before data reaches the sampler. Growth is computed *before* rank selection to preserve per-vintage measurement error semantics.
+- **Data pipeline**: `build_panel()` (`ingest/panel.py`) reads the vintage store (`data/store/`) + provider parquet files (`data/providers/`) → `panel_to_model_data()` (`panel_adapter.py`) converts the panel to model arrays (growth rates, BD covariates, cyclical indicators). Provider files share the vintage store schema but omit `revision`, `benchmark_revision`, and `vintage_date` (no vintages for provider data; `ref_date` determines currency). Cell-level provider parquets have a different schema (`geographic_type, geographic_code, industry_type, industry_code, ref_date, n_pseudo_estabs, employment`); the loader detects these and composites via `ingest/compositing.py` before entering the standard pipeline. `build_panel(as_of_ref=D)` activates rank-based horizon censoring for CES/QCEW (see below).
+- **Rank-based horizon censoring** (`vintage_store.py`): `transform_to_panel(lf, as_of_ref=D)` applies two-layer censoring: (1) `vintage_date <= D` + `ref_date < D` filtering prevents lookahead; (2) rank-based selection picks the correct revision per recency rank. CES uses `_select_ces_at_horizon`: rank 1→rev-0 (1st print), rank 2→rev-1 (2nd print), rank 3+→rev-2 with `benchmark_revision=0` (actual 3rd print only — benchmark-revised rows are never selected). Benchmark-quality information enters the model exclusively through QCEW observations. QCEW uses `_select_qcew_at_horizon`: quarter-dependent revision rules matching BLS publication schedule (`_QCEW_MAX_REVISION = {Q1: 4, Q2: 3, Q3: 2, Q4: 1}`). Both helpers have fallback logic when prescribed revisions don't exist at the data frontier. `_validate_censored_selection` runs fail-fast checks (no duplicate ref_dates, consecutive months, no null/zero employment/growth, row count sanity) before data reaches the sampler. Growth is computed *before* rank selection to preserve per-vintage measurement error semantics. In `panel_adapter.py`, `_vintage_series` for v3 uses `rev_values=(2,)` — only actual 3rd prints, not benchmark-revised (`revision_number=-1`).
 - PyMC models are built declaratively; sampling uses nutpie when available.
 - Output artifacts (NetCDF inference data, PNG plots) go to `output/`.
 - **FRED API client** (`ingest/fred.py`): `fetch_fred_series(series_id)` downloads a single FRED time series via the JSON API (`api.stlouisfed.org`). Uses `httpx` with exponential-backoff retry. Requires `FRED_API_KEY` env var.
@@ -208,7 +213,12 @@ alt_nfp/
 - **Benchmark revision inference** (`benchmark.py`): extracts March-level employment changes from the posterior, compares to actual BLS benchmark revisions (`lookups/benchmark_revisions.py`), decomposes into continuing-units divergence + BD accumulation.
 - **Nowcast backtest** (`backtest.py`): real-time vintage-aware backtest over the last *n* months. For each target month T, builds a censored panel via `build_panel(as_of_ref=T)` (rank-based CES/QCEW selection), then applies `panel_to_model_data(panel, PROVIDERS, as_of=T)` for provider/cyclical indicator censoring. CES gets the revision that existed at each point (T-1 = rev 0, T-2 = rev 1, T-3 = rev 2), QCEW is naturally missing for the most recent ~5-6 months, cyclical indicators are censored by their publication lags. Compares the model's nowcast to the final CES release. Reports per-month errors (growth pp, jobs-added k) and the vintage frontier (latest CES/QCEW period available). Requires the vintage store (`data/store/`) to have triangular revision history; warns when the CES frontier is stale.
 - **Benchmark backtest** (`benchmark_backtest.py`): tests benchmark revision prediction at multiple horizons (T-12, T-9, T-6, T-3, T-1 months before March report). Uses `as_of` parameter in `panel_to_model_data()` to censor observations by vintage date, simulating real-time information sets. Computes RMSE, 90% coverage, and comparative baselines (naive zero, prior-year).
-- **Precision budget** (`diagnostics.compute_precision_budget()`): quantifies information contribution by source as `share_i = precision_i / Σ(precision)`, accounting for CES vintage-specific sigmas, QCEW M3/M12 distinctions, and provider signal loadings with AR1 autocorrelation. Outputs to `output/precision_budget.parquet`.
+- **QCEW observation noise** (post-overhaul): Per-observation sigma is `sigma_qcew[i] = base_sigma_tier[i] * revision_multiplier[i]`. Two **estimated** LogNormal base sigmas: `sigma_qcew_mid` (M2 months: Feb, May, Aug, Nov) and `sigma_qcew_boundary` (M3 + M1, including January). LogNormal priors (instead of HalfNormal) prevent the funnel geometry that arises when sigma collapses toward zero and QCEW precision overwhelms all other sources. Revision multipliers come from `lookups/revision_schedules.py` via `get_noise_multiplier("qcew_Q1".."qcew_Q4", rev)` using the selected revision for each observation. Panel adapter exposes `qcew_is_m2` and `qcew_noise_mult` (no longer `qcew_is_m3`). Priors: `LOG_SIGMA_QCEW_MID_MU`/`_SD`, `LOG_SIGMA_QCEW_BOUNDARY_MU`/`_SD` in `config.py` (log-space mu and sigma for the LogNormal). Empirical calibration of multipliers used 2017+ data only (excluding 2020–2021). M1/M2 QCEW are retrospective (not imputed); M3 can have payroll-timing quirks (e.g. monthly payers reporting 0 for M3).
+- **Precision budget** (`diagnostics.compute_precision_budget()`): quantifies information contribution by source as `share_i = precision_i / Σ(precision)`, using CES vintage-specific sigmas, **QCEW (M2)** vs **QCEW (M3+M1)** with per-observation `qcew_noise_mult`, and provider signal loadings (with AR1 where applicable). Outputs to `output/precision_budget.parquet`. `print_windowed_precision_budget()` reports precision shares by era window. `diagnostics.print_weight_staleness()` reports QCEW weight carry-forward for cell-level providers.
+- **Provider data window**: Provider (e.g. G) data may start mid-sample (e.g. 2019-01). Birth-rate and provider growth means in `panel_adapter.py` are computed only over the calendar window where that provider has data, to avoid "Mean of empty slice" and to keep priors appropriate for the provider-covered period.
+- **Forecast** (`forecast.py`): expects `data["levels"]` to be a Polars DataFrame with columns `ref_date`, `ces_sa_index`, `ces_nsa_index`, `ces_sa_level`, `ces_nsa_level`, and provider `emp_col` series. Levels are built in `panel_adapter.py`; `ces_sa_level`/`ces_nsa_level` come from national panel `employment_level` when present.
+- **Era-specific diagnostics**: `print_windowed_precision_budget(idata, data)` reports precision shares per era (using `config.ERA_BREAKS`). `print_provider_value_of_information(idata, data)` compares posterior `g_cont` 80% HDI width at time steps with vs without provider data (within the same era, e.g. Post-COVID) to quantify provider value-of-information.
+- **LOO-CV**: QCEW likelihood can show high p_loo and many k-hat > 0.7 (influential observations) when QCEW precision share is large. Options include skipping LOO for `obs_qcew` in reporting or tightening QCEW priors; see `checks.py` for the LOO loop.
 - **`@pytest.mark.network`**: tests requiring network access are marked; deselect with `-m "not network"`.
 
 ---

@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import OUTPUT_DIR, SIGMA_QCEW_M3, SIGMA_QCEW_M12
+from .config import OUTPUT_DIR
 
 # =========================================================================
 # Parameter summary & convergence
@@ -54,6 +54,11 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
         *(["phi_1"] if "phi_1" in idata.posterior else []),
         *(["phi_2"] if "phi_2" in idata.posterior else []),
         "alpha_ces", "lambda_ces", "sigma_ces_sa", "sigma_ces_nsa",
+        *(
+            ["sigma_qcew_mid", "sigma_qcew_boundary"]
+            if "sigma_qcew_mid" in idata.posterior
+            else []
+        ),
     ]
     # Cyclical indicator loadings (phi_3) if present
     if "phi_3" in idata.posterior:
@@ -193,6 +198,33 @@ def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
 # =========================================================================
 
 
+def _qcew_precision_by_tier(
+    idata: az.InferenceData, data: dict
+) -> tuple[float, float, int, int]:
+    """Total QCEW precision and tier counts from posterior sigmas and multipliers."""
+    sigma_mid = float(idata.posterior["sigma_qcew_mid"].values.flatten().mean())
+    sigma_boundary = float(
+        idata.posterior["sigma_qcew_boundary"].values.flatten().mean()
+    )
+    qcew_is_m2 = np.asarray(data["qcew_is_m2"])
+    qcew_noise_mult = np.asarray(data["qcew_noise_mult"], dtype=float)
+    n_obs = len(qcew_is_m2)
+    sigma_per_obs = np.where(
+        qcew_is_m2,
+        sigma_mid * qcew_noise_mult,
+        sigma_boundary * qcew_noise_mult,
+    )
+    prec_per_obs = 1.0 / (sigma_per_obs**2)
+    total_prec_qcew = float(np.sum(prec_per_obs))
+    n_m2 = int(qcew_is_m2.sum())
+    n_boundary = n_obs - n_m2
+    prec_m2 = float(np.sum(prec_per_obs[qcew_is_m2])) if n_m2 > 0 else 0.0
+    prec_boundary = (
+        float(np.sum(prec_per_obs[~qcew_is_m2])) if n_boundary > 0 else 0.0
+    )
+    return total_prec_qcew, prec_m2, prec_boundary, n_m2, n_boundary
+
+
 def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
     """Quantify each source's precision-weighted information contribution."""
     pp_data = data["pp_data"]
@@ -201,13 +233,17 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
     sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, 3)
     lambda_ces = idata.posterior["lambda_ces"].values.flatten().mean()
 
-    prec_qcew_m3 = 1.0 / SIGMA_QCEW_M3**2
-    prec_qcew_m12 = 1.0 / SIGMA_QCEW_M12**2
-
-    qcew_is_m3 = data["qcew_is_m3"]
-    n_qcew_m3 = int(qcew_is_m3.sum())
-    n_qcew_m12 = len(data["qcew_obs"]) - n_qcew_m3
-    total_prec_qcew = prec_qcew_m3 * n_qcew_m3 + prec_qcew_m12 * n_qcew_m12
+    (
+        total_prec_qcew,
+        prec_qcew_m2,
+        prec_qcew_boundary,
+        n_qcew_m2,
+        n_qcew_boundary,
+    ) = _qcew_precision_by_tier(idata, data)
+    prec_per_m2 = prec_qcew_m2 / n_qcew_m2 if n_qcew_m2 > 0 else 0.0
+    prec_per_boundary = (
+        prec_qcew_boundary / n_qcew_boundary if n_qcew_boundary > 0 else 0.0
+    )
 
     # CES vintage-specific precision
     vintage_labels = ['1st', '2nd', 'Final']
@@ -265,8 +301,10 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
         _row(nm, n, pp_per, pp_tot)
     for nm, n, pp_per, pp_tot in pp_rows:
         _row(nm, n, pp_per, pp_tot)
-    _row("QCEW (M3)", n_qcew_m3, prec_qcew_m3, prec_qcew_m3 * n_qcew_m3)
-    _row("QCEW (M1-2)", n_qcew_m12, prec_qcew_m12, prec_qcew_m12 * n_qcew_m12)
+    if n_qcew_m2 > 0:
+        _row("QCEW (M2)", n_qcew_m2, prec_per_m2, prec_qcew_m2)
+    if n_qcew_boundary > 0:
+        _row("QCEW (M3+M1)", n_qcew_boundary, prec_per_boundary, prec_qcew_boundary)
     print("-" * 72)
     print(f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}")
 
@@ -285,12 +323,17 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
     lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
     alpha_ces = float(idata.posterior["alpha_ces"].values.flatten().mean())
 
-    prec_qcew_m3 = 1.0 / SIGMA_QCEW_M3**2
-    prec_qcew_m12 = 1.0 / SIGMA_QCEW_M12**2
-
-    qcew_is_m3 = data["qcew_is_m3"]
-    n_qcew_m3 = int(qcew_is_m3.sum())
-    n_qcew_m12 = len(data["qcew_obs"]) - n_qcew_m3
+    (
+        _,
+        prec_qcew_m2,
+        prec_qcew_boundary,
+        n_qcew_m2,
+        n_qcew_boundary,
+    ) = _qcew_precision_by_tier(idata, data)
+    prec_per_m2 = prec_qcew_m2 / n_qcew_m2 if n_qcew_m2 > 0 else 0.0
+    prec_per_boundary = (
+        prec_qcew_boundary / n_qcew_boundary if n_qcew_boundary > 0 else 0.0
+    )
 
     rows: list[dict] = []
 
@@ -347,21 +390,21 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
         })
 
     # QCEW precision
-    if n_qcew_m3 > 0:
+    if n_qcew_m2 > 0:
         rows.append({
-            "source": "QCEW (M3)",
-            "n_obs": n_qcew_m3,
-            "precision_per_obs": prec_qcew_m3,
-            "total_precision": prec_qcew_m3 * n_qcew_m3,
+            "source": "QCEW (M2)",
+            "n_obs": n_qcew_m2,
+            "precision_per_obs": prec_per_m2,
+            "total_precision": prec_qcew_m2,
             "lambda_mean": 1.0,
             "alpha_mean": 0.0,
         })
-    if n_qcew_m12 > 0:
+    if n_qcew_boundary > 0:
         rows.append({
-            "source": "QCEW (M1-2)",
-            "n_obs": n_qcew_m12,
-            "precision_per_obs": prec_qcew_m12,
-            "total_precision": prec_qcew_m12 * n_qcew_m12,
+            "source": "QCEW (M3+M1)",
+            "n_obs": n_qcew_boundary,
+            "precision_per_obs": prec_per_boundary,
+            "total_precision": prec_qcew_boundary,
             "lambda_mean": 1.0,
             "alpha_mean": 0.0,
         })
@@ -370,6 +413,209 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
     total = df["total_precision"].sum()
     df = df.with_columns((pl.col("total_precision") / total).alias("share"))
     return df
+
+
+# =========================================================================
+# Era-specific (windowed) precision budget
+# =========================================================================
+
+_ERA_LABELS_DIAG = [
+    "Pre-GFC  (2003 → 2008-12)",
+    "Post-GFC (2009-01 → 2019-12)",
+    "Post-COVID (2020-01 → present)",
+]
+
+
+def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None:
+    """Print precision-weighted information budget restricted to each era window.
+
+    Shows per-era observation counts and precision shares so that sources
+    (e.g. the G provider) that only exist in one era can be compared fairly.
+    """
+    pp_data = data["pp_data"]
+    era_idx = data["era_idx"]  # (T,)
+    dates = data["dates"]
+    T = len(dates)
+
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values
+    lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
+
+    sigma_mid = float(idata.posterior["sigma_qcew_mid"].values.flatten().mean())
+    sigma_boundary = float(
+        idata.posterior["sigma_qcew_boundary"].values.flatten().mean()
+    )
+    qcew_obs = data["qcew_obs"]
+    qcew_is_m2 = np.asarray(data["qcew_is_m2"])
+    qcew_noise_mult = np.asarray(data["qcew_noise_mult"], dtype=float)
+
+    vintage_labels = ["1st", "2nd", "Final"]
+    n_eras = int(era_idx.max()) + 1 if len(era_idx) > 0 else 0
+
+    for e in range(n_eras):
+        era_t_idx = np.where(era_idx == e)[0]
+        n_months = len(era_t_idx)
+        if n_months == 0:
+            continue
+
+        start_d = dates[era_t_idx[0]]
+        end_d = dates[era_t_idx[-1]]
+        label = _ERA_LABELS_DIAG[e] if e < len(_ERA_LABELS_DIAG) else f"Era {e}"
+
+        # CES counts in this era
+        ces_rows: list[tuple[str, int, float, float]] = []
+        for v in range(3):
+            g_sa_v = data["g_ces_sa_by_vintage"][v]
+            g_nsa_v = data["g_ces_nsa_by_vintage"][v]
+            obs_sa = np.where(np.isfinite(g_sa_v))[0]
+            obs_nsa = np.where(np.isfinite(g_nsa_v))[0]
+            n_sa = len(np.intersect1d(obs_sa, era_t_idx))
+            n_nsa = len(np.intersect1d(obs_nsa, era_t_idx))
+
+            sig_sa_v = float(sigma_ces_sa[:, :, v].flatten().mean())
+            sig_nsa_v = float(sigma_ces_nsa[:, :, v].flatten().mean())
+
+            if n_sa > 0:
+                prec_sa = lambda_ces**2 / sig_sa_v**2
+                ces_rows.append((f"CES SA ({vintage_labels[v]})", n_sa, prec_sa, prec_sa * n_sa))
+            if n_nsa > 0:
+                prec_nsa = lambda_ces**2 / sig_nsa_v**2
+                ces_rows.append((f"CES NSA ({vintage_labels[v]})", n_nsa, prec_nsa, prec_nsa * n_nsa))
+
+        # Provider counts in this era
+        pp_rows: list[tuple[str, int, float, float]] = []
+        for pp in pp_data:
+            name = pp["config"].name.lower()
+            sig_p = float(idata.posterior[f"sigma_pp_{name}"].values.flatten().mean())
+            lam_p = float(idata.posterior[f"lam_{name}"].values.flatten().mean())
+            covered = np.intersect1d(pp["pp_obs"], era_t_idx)
+            n_obs = len(covered)
+            prec_p = lam_p**2 / sig_p**2
+            if pp["config"].error_model == "ar1":
+                rho_p = float(idata.posterior[f"rho_{name}"].values.flatten().mean())
+                prec_p = lam_p**2 * (1 - rho_p**2) / sig_p**2
+            pp_rows.append((pp["name"], n_obs, prec_p, prec_p * n_obs))
+
+        # QCEW: per-obs sigma = base_tier * revision_mult
+        in_era = np.isin(qcew_obs, era_t_idx)
+        sigma_per = np.where(
+            qcew_is_m2,
+            sigma_mid * qcew_noise_mult,
+            sigma_boundary * qcew_noise_mult,
+        )
+        prec_per = 1.0 / (sigma_per**2)
+        total_qcew = float(np.sum(prec_per[in_era]))
+        n_qcew_m2 = int((in_era & qcew_is_m2).sum())
+        n_qcew_boundary = int((in_era & ~qcew_is_m2).sum())
+        prec_qcew_m2_era = float(np.sum(prec_per[in_era & qcew_is_m2]))
+        prec_qcew_boundary_era = float(np.sum(prec_per[in_era & ~qcew_is_m2]))
+        prec_per_m2 = prec_qcew_m2_era / n_qcew_m2 if n_qcew_m2 > 0 else 0.0
+        prec_per_boundary = (
+            prec_qcew_boundary_era / n_qcew_boundary
+            if n_qcew_boundary > 0
+            else 0.0
+        )
+
+        total_ces = sum(r[3] for r in ces_rows)
+        total_pp = sum(r[3] for r in pp_rows)
+        total_all = total_ces + total_pp + total_qcew
+        if total_all == 0:
+            continue
+
+        print("\n" + "=" * 72)
+        print("ERA-SPECIFIC PRECISION BUDGET")
+        print("=" * 72)
+        print(f"{label}: {start_d} \u2192 {end_d}  ({n_months} months)")
+        hdr = f"{'Source':<20} {'Obs':<8} {'Prec/obs':>12} {'Total prec':>14} {'Share':>8}"
+        print(hdr)
+        print("-" * 72)
+
+        def _row(nm: str, n: int, pp_obs: float, total: float) -> None:
+            pct = 100.0 * total / total_all
+            print(f"{nm:<20} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%")
+
+        for nm, n, pp_per, pp_tot in ces_rows:
+            _row(nm, n, pp_per, pp_tot)
+        for nm, n, pp_per, pp_tot in pp_rows:
+            _row(nm, n, pp_per, pp_tot)
+        if n_qcew_m2 > 0:
+            _row("QCEW (M2)", n_qcew_m2, prec_per_m2, prec_qcew_m2_era)
+        if n_qcew_boundary > 0:
+            _row(
+                "QCEW (M3+M1)",
+                n_qcew_boundary,
+                prec_per_boundary,
+                prec_qcew_boundary_era,
+            )
+        print("-" * 72)
+        print(f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}")
+
+
+# =========================================================================
+# Provider value-of-information (posterior g_cont width)
+# =========================================================================
+
+
+def print_provider_value_of_information(idata: az.InferenceData, data: dict) -> None:
+    """Compare posterior g_cont uncertainty at provider-covered vs uncovered time steps.
+
+    Within each era, reports mean 80% HDI width for g_cont at months where
+    the provider has data vs months in the same era where it does not, to
+    show whether the provider meaningfully tightens the posterior.
+    """
+    pp_data = data["pp_data"]
+    era_idx = data["era_idx"]
+    T = era_idx.shape[0]
+
+    g_cont = idata.posterior["g_cont"].values  # (chains, draws, T)
+    hdi_lo = np.percentile(g_cont, 10, axis=(0, 1))
+    hdi_hi = np.percentile(g_cont, 90, axis=(0, 1))
+    hdi_width = hdi_hi - hdi_lo  # (T,) in decimal; *100 for %
+
+    print("\n" + "=" * 72)
+    print("PROVIDER VALUE-OF-INFORMATION (posterior g_cont 80% HDI width)")
+    print("=" * 72)
+
+    for pp in pp_data:
+        name = pp["config"].name.lower()
+        covered = np.asarray(pp["pp_obs"])
+        if len(covered) == 0:
+            print(f"\n  {pp['name']}: no observations \u2014 skipping")
+            continue
+
+        # Era(s) where this provider has data
+        eras_with_data = np.unique(era_idx[covered])
+        for e in eras_with_data:
+            era_t_idx = np.where(era_idx == e)[0]
+            in_era_covered = np.intersect1d(covered, era_t_idx)
+            in_era_uncovered = np.setdiff1d(era_t_idx, covered)
+            if len(in_era_covered) == 0:
+                continue
+
+            label = _ERA_LABELS_DIAG[e] if e < len(_ERA_LABELS_DIAG) else f"Era {e}"
+            width_with = np.mean(hdi_width[in_era_covered]) * 100
+            n_with = len(in_era_covered)
+
+            if len(in_era_uncovered) > 0:
+                width_without = np.mean(hdi_width[in_era_uncovered]) * 100
+                n_without = len(in_era_uncovered)
+                pct_narrower = (1.0 - width_with / width_without) * 100.0
+                print(
+                    f"\n  {pp['name']} \u2014 {label}:"
+                )
+                print(
+                    f"    With {pp['name']} data:    {width_with:.4f}%/mo mean HDI width (n={n_with})"
+                )
+                print(
+                    f"    Without {pp['name']} data: {width_without:.4f}%/mo mean HDI width (n={n_without})"
+                )
+                print(f"    Narrowing:               {pct_narrower:+.1f}%")
+            else:
+                print(f"\n  {pp['name']} \u2014 {label}:")
+                print(
+                    f"    With {pp['name']} data:    {width_with:.4f}%/mo mean HDI width (n={n_with})"
+                )
+                print("    (all months in this era have provider data \u2014 no uncovered baseline)")
 
 
 # =========================================================================
@@ -439,3 +685,58 @@ def plot_divergences(idata: az.InferenceData, data: dict) -> None:
     fig.savefig(OUTPUT_DIR / "divergences.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {OUTPUT_DIR / 'divergences.png'}")
+
+
+# =========================================================================
+# Weight staleness reporting for QCEW-weighted compositing (§6.3)
+# =========================================================================
+
+
+def print_weight_staleness(providers: list) -> None:
+    """Report QCEW weight staleness for cell-level providers.
+
+    For each provider whose parquet contains cell-level data
+    (``geographic_type='region'``), compute the QCEW-weighted composite
+    staleness metadata and print a summary.
+
+    Parameters
+    ----------
+    providers
+        List of :class:`~alt_nfp.config.ProviderConfig` instances.
+    """
+    from .config import DATA_DIR, MIN_PSEUDO_ESTABS_PER_CELL, STORE_DIR
+    from .ingest.compositing import compute_provider_composite
+    from .ingest.payroll import _is_cell_level, read_provider_table
+
+    found_any = False
+    for cfg in providers:
+        fpath = DATA_DIR / cfg.file
+        raw = read_provider_table(fpath)
+        if raw is None or not _is_cell_level(raw):
+            continue
+
+        _, staleness = compute_provider_composite(
+            raw, STORE_DIR, MIN_PSEUDO_ESTABS_PER_CELL,
+        )
+        if staleness.is_empty():
+            continue
+
+        found_any = True
+        s = staleness["weight_staleness_months"]
+        n_current = int((s == 0).sum())
+        n_forward = int((s > 0).sum())
+
+        print(f"\n  {cfg.name}:")
+        print(f"    Months with current QCEW weights:       {n_current}")
+        print(f"    Months with carried-forward weights:     {n_forward}")
+        if n_forward > 0:
+            fwd = staleness.filter(pl.col("weight_staleness_months") > 0)
+            fwd_s = fwd["weight_staleness_months"]
+            print(
+                f"    Staleness (carried-forward months):      "
+                f"min={fwd_s.min()}, max={fwd_s.max()}, "
+                f"mean={fwd_s.mean():.1f}"
+            )
+
+    if not found_any:
+        print("  (no cell-level providers detected)")

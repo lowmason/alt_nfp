@@ -27,7 +27,14 @@ from alt_nfp.checks import (
     run_prior_predictive_checks,
 )
 from alt_nfp.config import OUTPUT_DIR, PROVIDERS
-from alt_nfp.diagnostics import plot_divergences, print_diagnostics, print_source_contributions
+from alt_nfp.diagnostics import (
+    compute_precision_budget,
+    plot_divergences,
+    print_diagnostics,
+    print_provider_value_of_information,
+    print_source_contributions,
+    print_windowed_precision_budget,
+)
 from alt_nfp.forecast import forecast_and_plot
 from alt_nfp.ingest import build_panel
 from alt_nfp.model import build_model
@@ -60,7 +67,14 @@ def main() -> None:
     print_diagnostics(idata, data)
     print_era_summary(idata)
     print_source_contributions(idata, data)
+    print_windowed_precision_budget(idata, data)
+    print_provider_value_of_information(idata, data)
     plot_divergences(idata, data)
+
+    precision_df = compute_precision_budget(idata, data)
+    precision_df.write_parquet(str(OUTPUT_DIR / 'precision_budget.parquet'))
+    print(f"\nPrecision budget saved to {OUTPUT_DIR / 'precision_budget.parquet'}")
+    print(precision_df)
 
     # 6. Posterior predictive checks --------------------------------------------------------------
     run_posterior_predictive_checks(model, idata, data)

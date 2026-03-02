@@ -41,11 +41,15 @@ class TestPanelToModelData:
             assert arr.ndim == 1
             assert all(0 <= i < data["T"] for i in arr)
 
-    def test_qcew_is_m3(self, model_data):
+    def test_qcew_tier_and_mult(self, model_data):
         data = model_data
-        assert data["qcew_is_m3"].shape == (len(data["qcew_obs"]),)
-        if len(data["qcew_obs"]) > 0:
-            assert data["qcew_is_m3"].dtype == bool
+        n_qcew = len(data["qcew_obs"])
+        assert data["qcew_is_m2"].shape == (n_qcew,)
+        assert data["qcew_noise_mult"].shape == (n_qcew,)
+        if n_qcew > 0:
+            assert data["qcew_is_m2"].dtype == bool
+            assert data["qcew_noise_mult"].dtype == float
+            assert (data["qcew_noise_mult"] >= 1.0).all()
 
     def test_provider_data(self, model_data):
         data = model_data

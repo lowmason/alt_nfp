@@ -75,8 +75,11 @@ def _select_ces_at_horizon(ces_df: pl.DataFrame, D: date) -> pl.DataFrame:
 
     * Rank 1 → ``(revision=0, benchmark_revision=0)``
     * Rank 2 → ``(revision=1, benchmark_revision=0)``
-    * Rank 3 → ``(revision=2, benchmark_revision=0)``
-    * Rank 4+ → ``(revision=2, max benchmark_revision)``
+    * Rank 3+ → ``(revision=2, benchmark_revision=0)`` (actual 3rd print)
+
+    Benchmark-revised rows ``(revision=2, benchmark_revision>0)`` are
+    never selected.  Benchmark-quality information enters the model
+    through QCEW observations instead.
 
     A fallback picks ``max(revision), max(benchmark_revision)`` for any
     ``(series, ref_date)`` not matched by the prescribed rules.
@@ -99,15 +102,9 @@ def _select_ces_at_horizon(ces_df: pl.DataFrame, D: date) -> pl.DataFrame:
 
     r1 = df.filter((_rk == 1) & (_rev == 0) & (_bmr == 0))
     r2 = df.filter((_rk == 2) & (_rev == 1) & (_bmr == 0))
-    r3 = df.filter((_rk == 3) & (_rev == 2) & (_bmr == 0))
+    r3plus = df.filter((_rk >= 3) & (_rev == 2) & (_bmr == 0))
 
-    r4plus = df.filter((_rk >= 4) & (_rev == 2))
-    r4plus = (
-        r4plus.sort("benchmark_revision", descending=True)
-        .unique(subset=sk + ["ref_date"], keep="first")
-    )
-
-    selected = pl.concat([r1, r2, r3, r4plus])
+    selected = pl.concat([r1, r2, r3plus])
 
     # Fallback: any (series, ref_date) not yet selected
     all_keys = df.select(sk + ["ref_date"]).unique()

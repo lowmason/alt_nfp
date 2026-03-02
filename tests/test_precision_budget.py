@@ -39,6 +39,14 @@ class TestComputePrecisionBudget:
                 np.full((n_chains, n_draws), 0.0001),
                 dims=["chain", "draw"],
             ),
+            "sigma_qcew_mid": xr.DataArray(
+                np.full((n_chains, n_draws), 0.0005),
+                dims=["chain", "draw"],
+            ),
+            "sigma_qcew_boundary": xr.DataArray(
+                np.full((n_chains, n_draws), 0.002),
+                dims=["chain", "draw"],
+            ),
         })
 
         class MockIData:
@@ -62,7 +70,8 @@ class TestComputePrecisionBudget:
                 np.full(T, np.nan),
             ],
             "qcew_obs": np.arange(20),
-            "qcew_is_m3": np.array([i % 3 == 2 for i in range(20)]),
+            "qcew_is_m2": np.array([i % 3 == 1 for i in range(20)]),
+            "qcew_noise_mult": np.full(20, 1.0),
             "pp_data": [],
         }
 

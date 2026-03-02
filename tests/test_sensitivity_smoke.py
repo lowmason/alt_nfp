@@ -28,12 +28,10 @@ class TestSensitivityConfig:
         sigmas_m3 = [c[1] for c in QCEW_SIGMA_CONFIGS]
         assert sigmas_m3 == sorted(sigmas_m3)
 
-    def test_baseline_matches_constants(self):
-        from alt_nfp.config import SIGMA_QCEW_M3, SIGMA_QCEW_M12
-
+    def test_baseline_has_unit_scale(self):
         baseline = [c for c in QCEW_SIGMA_CONFIGS if "baseline" in c[0]][0]
-        assert baseline[1] == SIGMA_QCEW_M3
-        assert baseline[2] == SIGMA_QCEW_M12
+        assert baseline[1] == 1.0  # scale_mid
+        assert baseline[2] == 1.0  # scale_boundary
 
 
 class TestBuildParamSpecs:

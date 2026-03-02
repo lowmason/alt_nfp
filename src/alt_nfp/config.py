@@ -15,6 +15,7 @@ in :data:`PROVIDERS`.  The model, diagnostics, and plots adapt automatically.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -36,9 +37,14 @@ OUTPUT_DIR = BASE_DIR / "output"
 # Model constants
 # ---------------------------------------------------------------------------
 
-# QCEW fixed observation noise (growth-rate space)
-SIGMA_QCEW_M3 = 0.0005  # ~0.05%/mo — near-census, current-period tax filing
-SIGMA_QCEW_M12 = 0.0015  # ~0.15%/mo — retrospective UI months
+# QCEW observation noise: LogNormal priors for estimated base sigmas.
+# LogNormal avoids the funnel geometry that HalfNormal creates when sigma
+# collapses toward zero (QCEW precision overwhelms all other sources).
+# mu/sigma are the parameters of the underlying Normal on log(sigma_qcew).
+LOG_SIGMA_QCEW_MID_MU = math.log(0.0005)  # M2 months — 90% prior ≈ [0.0003, 0.0008]
+LOG_SIGMA_QCEW_MID_SD = 0.3
+LOG_SIGMA_QCEW_BOUNDARY_MU = math.log(0.002)  # M3+M1 months — 90% prior ≈ [0.0009, 0.0046]
+LOG_SIGMA_QCEW_BOUNDARY_SD = 0.5
 
 # QCEW publication lag in months (for structural BD error-correction term)
 BD_QCEW_LAG = 6
@@ -73,6 +79,11 @@ CYCLICAL_INDICATORS: list[dict] = [
     {'name': 'jolts', 'fred_id': 'JTSJOL', 'freq': 'monthly'},
 ]
 
+# Minimum pseudo-establishments per cell for QCEW-weighted compositing.
+# Cells with fewer pseudo-establishments are excluded; their weight is
+# redistributed to covered cells per provider_spec.md §5.2.
+MIN_PSEUDO_ESTABS_PER_CELL: int = 5
+
 # Plot colours — one per provider, cycled if >7 providers
 PP_COLORS = [
     "#2ca02c",  # green
@@ -97,13 +108,19 @@ class ProviderConfig:
     Adding a new provider requires only a new entry in ``PROVIDERS``.
     The model, diagnostics, and plots adapt automatically.
 
-    All provider files share a standard Parquet/CSV schema::
+    **National providers** (default) supply a pre-aggregated national time
+    series filtered by the ``geography_type`` / ``industry_type`` fields.
+    Birth rates may live in the same file (``birth_rate`` column) or in a
+    separate parquet pointed to by ``birth_file``.
 
-        ref_date, geography_type, geography_code,
-        industry_type, industry_code, employment, [birth_rate]
-
-    The ``employment`` column is log-differenced to compute growth rates.
-    If ``birth_rate`` is present it is used as a BD covariate.
+    **Cell-level providers** supply a supersector × Census-region parquet
+    (schema: ``geographic_type``, ``geographic_code``, ``industry_type``,
+    ``industry_code``, ``ref_date``, ``n_pseudo_estabs``, ``employment``).
+    When the loader detects ``geographic_type='region'`` in the file, it
+    performs QCEW-weighted compositing automatically (see
+    ``ingest/compositing.py`` and ``provider_spec.md`` §5).  Since cell-level
+    files have no birth-rate column, use ``birth_file`` to supply a separate
+    national-level birth-rate parquet.
 
     Parameters
     ----------
@@ -113,6 +130,11 @@ class ProviderConfig:
         Path relative to ``DATA_DIR`` (e.g. ``'providers/G/g_provider.parquet'``).
     error_model : ``'iid'`` | ``'ar1'``
         Measurement-error structure.
+    birth_file : str | None
+        Optional path (relative to ``DATA_DIR``) to a separate parquet
+        containing birth-rate data.  Expected schema includes at least
+        ``ref_date`` and ``birth_rate`` columns.  When *None*, the loader
+        looks for ``birth_rate`` in the main ``file`` instead.
     industry_type : str
         Filter value for the ``industry_type`` column (default ``'national'``).
     industry_code : str
@@ -126,6 +148,7 @@ class ProviderConfig:
     name: str
     file: str
     error_model: Literal["iid", "ar1"] = "iid"
+    birth_file: str | None = None
     industry_type: str = "national"
     industry_code: str = "00"
     geography_type: str = "national"
@@ -136,12 +159,15 @@ class ProviderConfig:
 # Active provider list — edit here to add/remove providers
 # ---------------------------------------------------------------------------
 
-# TODO: Representativeness correction (depends on private microdata repo)
-# Expected input: a single repr-corrected national composite per provider per month.
-# Computed externally as: y_p_t = Σ_c w_c_QCEW * y_p_c_t
-# where c indexes supersector × Census region cells.
-# Until that pipeline is available, the model consumes raw provider indices
-# (national aggregate only) without cell-level reweighting.
+# Cell-level providers supply supersector × region employment; the loader
+# detects this and applies QCEW-weighted compositing (ingest/compositing.py).
+# National providers are used directly.
 
 PROVIDERS: list[ProviderConfig] = [
+    ProviderConfig(
+        name="G",
+        file="providers/g/g_provider.parquet",
+        error_model="iid",
+        birth_file="providers/g/g_births.parquet",
+    ),
 ]

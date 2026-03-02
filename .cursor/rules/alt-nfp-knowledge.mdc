@@ -1,0 +1,31 @@
+---
+description: alt_nfp model and data conventions, QCEW/provider behavior, and gotchas
+alwaysApply: true
+---
+
+# alt_nfp Project Knowledge
+
+## QCEW observation noise
+- **Two tiers**: M2 months (Feb, May, Aug, Nov) use `sigma_qcew_mid`; M3 and M1 (incl. January) use `sigma_qcew_boundary`. Per-obs sigma = base × `qcew_noise_mult` from `revision_schedules.get_noise_multiplier("qcew_Q1".."qcew_Q4", rev)`.
+- Data dict uses `qcew_is_m2` and `qcew_noise_mult` (not `qcew_is_m3`). Diagnostics use "QCEW (M2)" and "QCEW (M3+M1)".
+- Empirical multiplier calibration uses **2017+** only (not earlier revisions).
+
+## Provider data
+- Provider series (e.g. G) can start mid-sample (e.g. 2019-01). Birth-rate and provider growth means are computed **only over the window where that provider has data** to avoid empty-slice warnings and wrong priors.
+- Config: `LOG_SIGMA_QCEW_MID_MU`/`_SD`, `LOG_SIGMA_QCEW_BOUNDARY_MU`/`_SD` (LogNormal log-space params); no `SIGMA_QCEW_M3`/`M12`.
+
+## Forecast and levels
+- `forecast.py` expects `data["levels"]` with columns: `ref_date`, `ces_sa_index`, `ces_nsa_index`, `ces_sa_level`, `ces_nsa_level`, and each provider’s `emp_col`. If `ces_sa_level`/`ces_nsa_level` are missing (e.g. national panel without `employment_level`), forecast will raise `ColumnNotFoundError`; ensure `panel_to_model_data()` is called with a national panel that has employment levels when forecast is run.
+
+## Diagnostics
+- Precision budget and source contributions use `_qcew_precision_by_tier(idata, data)` with posterior `sigma_qcew_mid`/`sigma_qcew_boundary` and `qcew_is_m2`/`qcew_noise_mult`.
+- Era-specific: `print_windowed_precision_budget()`, `print_provider_value_of_information()` (same-era comparison for g_cont HDI width with/without provider).
+
+## CES vintage selection
+- **V3 uses actual 3rd prints only** (`revision_number=2, benchmark_revision=0`). Benchmark-revised rows (`revision_number=-1` or `benchmark_revision>0`) are never used as CES observations. Benchmark information enters the model exclusively through QCEW.
+- In `panel_adapter.py`, `_vintage_series` v3 calls use `rev_values=(2,)`.
+- In `vintage_store.py`, `_select_ces_at_horizon` rank 3+ selects `(rev=2, bmr=0)`.
+
+## Tests
+- Panel adapter tests expect `qcew_is_m2` and `qcew_noise_mult` (not `qcew_is_m3`). Precision budget tests mock `sigma_qcew_mid`, `sigma_qcew_boundary`, `qcew_is_m2`, `qcew_noise_mult`.
+- Vintage store: `test_rank3plus_uses_actual_3rd_print` verifies rank 3+ selects `(rev=2, bmr=0)`, not max bmr.

@@ -7,9 +7,8 @@ Builds a hierarchical Bayesian model with the following components:
    Gaussian random walk.
 3. **Structural birth/death** — time-varying offset driven by birth-rate,
    lagged QCEW BD proxy, and optional cyclical demand indicators.
-4. **QCEW likelihood** — near-census truth anchor with fixed observation
-   noise differentiated by quarter-end (M3) vs retrospective-UI (M1-2)
-   months.
+4. **QCEW likelihood** — near-census truth anchor with estimated base noise
+   by tier (M2 vs M3+M1) and per-observation revision multipliers.
 5. **CES likelihood** — vintage-specific noise (1st print, 2nd print,
    final) with shared bias/loading parameters.
 6. **Provider likelihoods** — config-driven loop supporting both iid and
@@ -23,24 +22,24 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 
-from .config import CYCLICAL_INDICATORS, N_ERAS, N_HARMONICS, SIGMA_QCEW_M3, SIGMA_QCEW_M12
+from .config import (
+    CYCLICAL_INDICATORS,
+    LOG_SIGMA_QCEW_BOUNDARY_MU,
+    LOG_SIGMA_QCEW_BOUNDARY_SD,
+    LOG_SIGMA_QCEW_MID_MU,
+    LOG_SIGMA_QCEW_MID_SD,
+    N_ERAS,
+    N_HARMONICS,
+)
 
 
-def build_model(
-    data: dict,
-    sigma_qcew_m3: float | None = None,
-    sigma_qcew_m12: float | None = None,
-) -> pm.Model:
+def build_model(data: dict) -> pm.Model:
     """Build the QCEW-anchored PyMC model.
 
     Parameters
     ----------
     data : dict
         Output of :func:`alt_nfp.panel_adapter.panel_to_model_data`.
-    sigma_qcew_m3 : float, optional
-        Override QCEW quarter-end noise.  Defaults to config value.
-    sigma_qcew_m12 : float, optional
-        Override QCEW retrospective-UI noise.  Defaults to config value.
 
     Key changes from v2
     --------------------
@@ -48,19 +47,39 @@ def build_model(
       ``data['pp_data']`` / ``ProviderConfig``.
     * Birth/death is time-varying:
       ``bd_t = φ₀ + φ₁·birth_rate_c + φ₂·bd_qcew_c + σ_bd·ξ_t``
+    * QCEW observation noise: two estimated base sigmas (M2 vs M3+M1)
+      times per-observation revision multiplier from ``data['qcew_noise_mult']``.
     """
-    if sigma_qcew_m3 is None:
-        sigma_qcew_m3 = SIGMA_QCEW_M3
-    if sigma_qcew_m12 is None:
-        sigma_qcew_m12 = SIGMA_QCEW_M12
-
     T = data["T"]
     month_of_year = data["month_of_year"]
     pp_data = data["pp_data"]
 
-    qcew_sigma_fixed = np.where(data["qcew_is_m3"], sigma_qcew_m3, sigma_qcew_m12)
-
     with pm.Model() as model:
+
+        # =============================================================
+        # QCEW observation noise: estimated base by tier × revision mult
+        # LogNormal avoids the funnel that HalfNormal creates when sigma
+        # collapses toward zero (extreme QCEW precision → bimodality).
+        # =============================================================
+        sigma_qcew_mid = pm.LogNormal(
+            "sigma_qcew_mid",
+            mu=LOG_SIGMA_QCEW_MID_MU,
+            sigma=LOG_SIGMA_QCEW_MID_SD,
+        )
+        sigma_qcew_boundary = pm.LogNormal(
+            "sigma_qcew_boundary",
+            mu=LOG_SIGMA_QCEW_BOUNDARY_MU,
+            sigma=LOG_SIGMA_QCEW_BOUNDARY_SD,
+        )
+        qcew_is_m2 = pt.as_tensor_variable(
+            np.asarray(data["qcew_is_m2"], dtype=bool)
+        )
+        base_sigma = pt.switch(
+            qcew_is_m2, sigma_qcew_mid, sigma_qcew_boundary
+        )
+        qcew_sigma = base_sigma * pt.as_tensor_variable(
+            data["qcew_noise_mult"], dtype=pt.dscalar
+        )
 
         # =============================================================
         # Latent continuing-units growth: AR(1) with mean reversion
@@ -218,7 +237,7 @@ def build_model(
         pm.Normal(
             "obs_qcew",
             mu=g_total_nsa[data["qcew_obs"]],
-            sigma=qcew_sigma_fixed,
+            sigma=qcew_sigma,
             observed=data["g_qcew"][data["qcew_obs"]],
         )
 

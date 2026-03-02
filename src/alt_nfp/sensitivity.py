@@ -15,33 +15,45 @@ Outputs include a grouped bar-chart comparing parameters across configs.
 
 from __future__ import annotations
 
+import math
+
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .config import OUTPUT_DIR, PROVIDERS, SIGMA_QCEW_M3, SIGMA_QCEW_M12
-from .diagnostics import print_source_contributions
+from . import config as _config
+from .config import (
+    LOG_SIGMA_QCEW_BOUNDARY_MU,
+    LOG_SIGMA_QCEW_MID_MU,
+    OUTPUT_DIR,
+    PROVIDERS,
+)
+from .diagnostics import _qcew_precision_by_tier, print_source_contributions
 from .ingest import build_panel
 from .model import build_model
 from .panel_adapter import panel_to_model_data
 from .sampling import MEDIUM_SAMPLER_KWARGS, sample_model
 
-# Configs: (label, sigma_m3, sigma_m12)
+# Configs: (label, scale_mid, scale_boundary)
+# Scaling shifts the LogNormal log-mu by log(scale), so "2x" doubles the
+# prior center for sigma_qcew while preserving the log-space spread.
 QCEW_SIGMA_CONFIGS: list[tuple[str, float, float]] = [
-    ("0.5x (tight)", SIGMA_QCEW_M3 * 0.5, SIGMA_QCEW_M12 * 0.5),
-    ("1x (baseline)", SIGMA_QCEW_M3, SIGMA_QCEW_M12),
-    ("2x (loose)", SIGMA_QCEW_M3 * 2.0, SIGMA_QCEW_M12 * 2.0),
+    ("0.5x (tight)", 0.5, 0.5),
+    ("1x (baseline)", 1.0, 1.0),
+    ("2x (loose)", 2.0, 2.0),
 ]
 
 
 def run_sensitivity(
     configs: list[tuple[str, float, float]] | None = None,
 ) -> list[dict]:
-    """Run QCEW sigma sensitivity sweep.
+    """Run QCEW prior-scale sensitivity sweep.
 
     Parameters
     ----------
-    configs : list of (label, sigma_m3, sigma_m12), optional
-        Override the default 0.5x / 1x / 2x grid.
+    configs : list of (label, scale_mid, scale_boundary), optional
+        Override the default 0.5x / 1x / 2x grid.  Each scale factor shifts
+        the LogNormal log-mu by ``log(scale)``, effectively multiplying the
+        prior center for sigma_qcew by ``scale``.
 
     Returns
     -------
@@ -58,36 +70,46 @@ def run_sensitivity(
     data = panel_to_model_data(panel, PROVIDERS)
     print()
 
-    # Parameters to compare — (display_name, posterior_key, pp_index_or_None, scale, fmt)
     param_specs = _build_param_specs(data)
 
+    orig_mid_mu = _config.LOG_SIGMA_QCEW_MID_MU
+    orig_boundary_mu = _config.LOG_SIGMA_QCEW_BOUNDARY_MU
     results: list[dict] = []
 
-    for label, sigma_m3, sigma_m12 in configs:
-        print(f"Running config: {label} (\u03c3_M3={sigma_m3}, \u03c3_M12={sigma_m12})\u2026")
-        model = build_model(data, sigma_qcew_m3=sigma_m3, sigma_qcew_m12=sigma_m12)
-        idata = sample_model(model, sampler_kwargs=MEDIUM_SAMPLER_KWARGS)
-
-        row: dict = {"config": label}
-        post = idata.posterior
-
-        for pname, key, idx, scale, _ in param_specs:
-            vals = post[key].values
-            if idx is not None:
-                vals = vals[:, :, idx]
-            v = vals.flatten()
-            row[pname] = (
-                v.mean() * scale,
-                float(np.percentile(v, 10)) * scale,
-                float(np.percentile(v, 90)) * scale,
+    try:
+        for label, scale_mid, scale_boundary in configs:
+            print(
+                f"Running config: {label} "
+                f"(prior scale mid={scale_mid}, boundary={scale_boundary})\u2026"
             )
+            _config.LOG_SIGMA_QCEW_MID_MU = orig_mid_mu + math.log(scale_mid)
+            _config.LOG_SIGMA_QCEW_BOUNDARY_MU = orig_boundary_mu + math.log(scale_boundary)
+            model = build_model(data)
+            idata = sample_model(model, sampler_kwargs=MEDIUM_SAMPLER_KWARGS)
 
-        shares = _precision_shares(idata, data, sigma_m3, sigma_m12)
-        row["precision_shares"] = shares
-        results.append(row)
+            row: dict = {"config": label}
+            post = idata.posterior
 
-        print_source_contributions(idata, data)
-        print(f"  Done.\n")
+            for pname, key, idx, scale, _ in param_specs:
+                vals = post[key].values
+                if idx is not None:
+                    vals = vals[:, :, idx]
+                v = vals.flatten()
+                row[pname] = (
+                    v.mean() * scale,
+                    float(np.percentile(v, 10)) * scale,
+                    float(np.percentile(v, 90)) * scale,
+                )
+
+            shares = _precision_shares(idata, data)
+            row["precision_shares"] = shares
+            results.append(row)
+
+            print_source_contributions(idata, data)
+            print(f"  Done.\n")
+    finally:
+        _config.LOG_SIGMA_QCEW_MID_MU = orig_mid_mu
+        _config.LOG_SIGMA_QCEW_BOUNDARY_MU = orig_boundary_mu
 
     _print_comparison_table(results, param_specs, configs)
     _print_precision_table(results)
@@ -118,9 +140,9 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
             (f"\u03c3_ces_nsa_{vintage_labels[v]} (%)", "sigma_ces_nsa", v, 100, ".3f")
         )
     specs.append(("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"))
-    if "phi_1" in idata.posterior:
+    if np.any(data.get("birth_rate_c", np.zeros(1)) != 0.0):
         specs.append(("\u03c6_1 (birth)", "phi_1", None, 1, ".3f"))
-    if "phi_2" in idata.posterior:
+    if np.any(data.get("bd_qcew_c", np.zeros(1)) != 0.0):
         specs.append(("\u03c6_2 (QCEW lag)", "phi_2", None, 1, ".3f"))
     specs.append(("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"))
     # Cyclical indicator loadings (phi_3) if available
@@ -151,21 +173,14 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
 # =========================================================================
 
 
-def _precision_shares(
-    idata, data: dict, sigma_m3: float, sigma_m12: float,
-) -> dict[str, float]:
+def _precision_shares(idata, data: dict) -> dict[str, float]:
     """Return ``{source: share}`` of total precision."""
     post = idata.posterior
     lam_ces = post["lambda_ces"].values.flatten().mean()
     sig_ces_sa = post["sigma_ces_sa"].values     # (chains, draws, 3)
     sig_ces_nsa = post["sigma_ces_nsa"].values   # (chains, draws, 3)
 
-    prec_qcew_m3 = 1.0 / sigma_m3**2
-    prec_qcew_m12 = 1.0 / sigma_m12**2
-
-    n_qcew_m3 = int(data["qcew_is_m3"].sum())
-    n_qcew_m12 = len(data["qcew_obs"]) - n_qcew_m3
-    total_qcew = prec_qcew_m3 * n_qcew_m3 + prec_qcew_m12 * n_qcew_m12
+    total_qcew, _, _, _, _ = _qcew_precision_by_tier(idata, data)
 
     # CES vintage-specific precision
     vintage_labels = ['1st', '2nd', 'Final']
@@ -223,7 +238,7 @@ def _print_comparison_table(results, param_specs, configs) -> None:
     print("QCEW SIGMA SENSITIVITY: Parameter comparison (mean, 80% HDI)")
     print("=" * 100)
     print(f"{'Parameter':<20}", end="")
-    for label, _, _ in configs:
+    for label, _s1, _s2 in configs:
         print(f"  {label:>24}", end="")
     print()
     print("-" * 100)
@@ -311,12 +326,12 @@ def _plot_sensitivity(results, param_specs, configs) -> None:
         his = [r[p][2] for p in plot_keys]
         err_lo = [m - lo for m, lo in zip(means, los)]
         err_hi = [hi - m for m, hi in zip(means, his)]
-        offset = (i - 1) * width
+        offset = (i - (len(results) - 1) / 2) * width
         bars = ax.bar(
             x + offset, means, width, label=r["config"],
             yerr=[err_lo, err_hi], capsize=2,
         )
-        if i == 1:
+        if len(results) >= 2 and i == (len(results) - 1) // 2:
             for b in bars:
                 b.set_edgecolor("black")
                 b.set_linewidth(1.2)

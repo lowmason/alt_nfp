@@ -824,15 +824,15 @@ class TestSelectCesAtHorizon:
         all_rds = df_no_rev0.filter(pl.col("ref_date") < D)["ref_date"].unique()
         assert selected["ref_date"].n_unique() == all_rds.n_unique()
 
-    def test_benchmark_revision_max_for_rank4plus(self):
-        """Rank 4+ prefers revision=2 with max benchmark_revision."""
+    def test_rank3plus_uses_actual_3rd_print(self):
+        """Rank 3+ selects revision=2, benchmark_revision=0 (actual 3rd print)."""
         df = _make_ces_triangle(n_months=8, include_benchmark=True)
         D = _ref(2024, 9)
 
         selected = _select_ces_at_horizon(df, D).sort("ref_date")
-        # Oldest ref_dates (rank >= 4) should have benchmark_revision=1
-        rank4plus = selected.head(len(selected) - 3)  # all except newest 3
-        assert all(r == 1 for r in rank4plus["benchmark_revision"].to_list())
+        rank3plus = selected.head(len(selected) - 2)  # all except newest 2
+        assert all(r == 2 for r in rank3plus["revision"].to_list())
+        assert all(r == 0 for r in rank3plus["benchmark_revision"].to_list())
 
     def test_empty_input(self):
         """Empty DataFrame returns empty."""

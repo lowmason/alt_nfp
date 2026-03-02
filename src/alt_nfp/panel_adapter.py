@@ -23,6 +23,7 @@ from .config import (
     ProviderConfig,
 )
 from .ingest.payroll import load_provider_series
+from .lookups.revision_schedules import get_noise_multiplier
 
 # Provider data is typically available ~3 weeks after the reference period.
 _PROVIDER_PUBLICATION_LAG_WEEKS = 3
@@ -144,9 +145,38 @@ def panel_to_model_data(
                 out[dates.index(period)] = float(growth)
         return out
 
+    def _qcew_series_with_meta(
+        nat: pl.DataFrame, date_list: list, length: int
+    ) -> tuple[np.ndarray, dict]:
+        """QCEW growth array and period -> revision_number for selected rows."""
+        out = np.full(length, np.nan, dtype=float)
+        sub = nat.filter(pl.col("source") == "qcew")
+        period_to_rev: dict = {}
+        if len(sub) == 0:
+            return out, period_to_rev
+        by_period = (
+            sub.with_columns(
+                pl.when(pl.col("revision_number") == -1)
+                .then(999)
+                .otherwise(pl.col("revision_number"))
+                .alias("_rev_sort")
+            )
+            .sort(pl.col("is_final").fill_null(False), "_rev_sort", descending=[True, True])
+            .unique(subset=["period"], keep="first")
+        )
+        for row in by_period.iter_rows(named=True):
+            period = row["period"]
+            growth = row["growth"]
+            rev = row.get("revision_number")
+            if period in date_list and growth is not None and np.isfinite(growth):
+                idx = date_list.index(period)
+                out[idx] = float(growth)
+                period_to_rev[period] = int(rev) if rev is not None else 0
+        return out, period_to_rev
+
     g_ces_sa = _growth_series("ces_sa")
     g_ces_nsa = _growth_series("ces_nsa")
-    g_qcew = _growth_series("qcew")
+    g_qcew, qcew_period_to_revision = _qcew_series_with_meta(national, dates, T)
 
     if censor_ces_from is not None and as_of is None:
         for i, d in enumerate(dates):
@@ -158,9 +188,20 @@ def panel_to_model_data(
     ces_sa_obs = np.where(np.isfinite(g_ces_sa))[0]
     ces_nsa_obs = np.where(np.isfinite(g_ces_nsa))[0]
     qcew_obs = np.where(np.isfinite(g_qcew))[0]
-    qcew_is_m3 = np.array([dates[i].month in (3, 6, 9, 12) for i in qcew_obs])
+    # M2 = quarter-interior months (Feb, May, Aug, Nov); boundary = M3 + M1
+    qcew_is_m2 = np.array([dates[i].month in (2, 5, 8, 11) for i in qcew_obs])
+    qcew_noise_mult = np.array(
+        [
+            get_noise_multiplier(
+                f"qcew_Q{(dates[i].month - 1) // 3 + 1}",
+                int(qcew_period_to_revision.get(dates[i], 0)),
+            )
+            for i in qcew_obs
+        ],
+        dtype=float,
+    )
 
-    # CES by vintage: v1=rev 0, v2=rev 1, v3=rev 2 or -1
+    # CES by vintage: v1=rev 0, v2=rev 1, v3=rev 2 (actual 3rd print, not benchmark)
     def _vintage_series(source: str, rev_values: tuple[int, ...]) -> np.ndarray:
         out = np.full(T, np.nan, dtype=float)
         sub = national.filter(
@@ -178,10 +219,10 @@ def panel_to_model_data(
 
     g_ces_sa_v1 = _vintage_series("ces_sa", (0,))
     g_ces_sa_v2 = _vintage_series("ces_sa", (1,))
-    g_ces_sa_v3 = _vintage_series("ces_sa", (2, -1))
+    g_ces_sa_v3 = _vintage_series("ces_sa", (2,))
     g_ces_nsa_v1 = _vintage_series("ces_nsa", (0,))
     g_ces_nsa_v2 = _vintage_series("ces_nsa", (1,))
-    g_ces_nsa_v3 = _vintage_series("ces_nsa", (2, -1))
+    g_ces_nsa_v3 = _vintage_series("ces_nsa", (2,))
 
     has_ces_vintage = (
         np.any(np.isfinite(g_ces_sa_v1)) or np.any(np.isfinite(g_ces_sa_v2))
@@ -239,15 +280,21 @@ def panel_to_model_data(
             entry["births_obs"] = None
         pp_data.append(entry)
 
-    # BD covariates
+    # BD covariates — restrict averaging to the provider-covered window so we
+    # don't nanmean over all-NaN slices for months before coverage begins.
     birth_arrays = [pp["births"] for pp in pp_data if pp["births"] is not None]
     if birth_arrays:
-        birth_rate = np.nanmean(np.vstack(birth_arrays), axis=0)
+        stacked = np.vstack(birth_arrays)
+        any_finite = np.any(np.isfinite(stacked), axis=0)
+        birth_rate = np.full(T, np.nan)
+        birth_rate[any_finite] = np.nanmean(stacked[:, any_finite], axis=0)
     else:
         birth_rate = np.full(T, np.nan)
     if pp_data:
         g_pp_stack = np.vstack([pp["g_pp"] for pp in pp_data])
-        g_pp_avg = np.nanmean(g_pp_stack, axis=0)
+        any_finite = np.any(np.isfinite(g_pp_stack), axis=0)
+        g_pp_avg = np.full(T, np.nan)
+        g_pp_avg[any_finite] = np.nanmean(g_pp_stack[:, any_finite], axis=0)
     else:
         g_pp_avg = np.full(T, np.nan)
     bd_proxy = g_qcew - g_pp_avg
@@ -289,19 +336,23 @@ def panel_to_model_data(
         g_ces_nsa=g_ces_nsa,
         g_qcew=g_qcew,
         pp_data=pp_data,
+        national=national,
     )
 
-    n_qcew_m3 = int(qcew_is_m3.sum())
-    n_qcew_m12 = len(qcew_obs) - n_qcew_m3
+    n_qcew_m2 = int(qcew_is_m2.sum())
+    n_qcew_boundary = len(qcew_obs) - n_qcew_m2
     n_birth = int(np.sum(np.isfinite(birth_rate)))
     n_bd_qcew = int(np.sum(np.isfinite(bd_qcew_lagged)))
 
     print(f"Growth-rate model (v3): T = {T} months ({dates[0]} → {dates[-1]})")
     print(f"  CES SA:  {len(ces_sa_obs)} monthly obs")
     print(f"  CES NSA: {len(ces_nsa_obs)} monthly obs")
+    rev_mult_str = ""
+    if len(qcew_obs) > 0:
+        rev_mult_str = f"; rev mult min={qcew_noise_mult.min():.1f}, max={qcew_noise_mult.max():.1f}"
     print(
         f"  QCEW:    {len(qcew_obs)} monthly obs (NSA) — "
-        f"{n_qcew_m3} quarter-end (M3), {n_qcew_m12} retrospective UI (M1-2)"
+        f"{n_qcew_m2} M2 (mid-quarter), {n_qcew_boundary} M3+M1 (boundary){rev_mult_str}"
     )
     for pp in pp_data:
         em = pp["config"].error_model
@@ -346,7 +397,8 @@ def panel_to_model_data(
         ces_nsa_obs=ces_nsa_obs,
         g_qcew=g_qcew,
         qcew_obs=qcew_obs,
-        qcew_is_m3=qcew_is_m3,
+        qcew_is_m2=qcew_is_m2,
+        qcew_noise_mult=qcew_noise_mult,
         pp_data=pp_data,
         n_providers=len(providers),
         birth_rate=birth_rate,
@@ -442,7 +494,11 @@ def _load_cyclical_indicators(dates: list, T: int) -> dict:
 
         if np.any(np.isfinite(arr)):
             mean_val = float(np.nanmean(arr))
-            arr_c = np.where(np.isfinite(arr), arr - mean_val, 0.0)
+            std_val = float(np.nanstd(arr))
+            if std_val > 0:
+                arr_c = np.where(np.isfinite(arr), (arr - mean_val) / std_val, 0.0)
+            else:
+                arr_c = np.where(np.isfinite(arr), arr - mean_val, 0.0)
             result[key] = arr_c
         else:
             result[key] = None
@@ -456,8 +512,14 @@ def _build_levels_from_growth(
     g_ces_nsa: np.ndarray,
     g_qcew: np.ndarray,
     pp_data: list[dict],
+    national: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
-    """Build a levels DataFrame from growth arrays (ref_date + index columns)."""
+    """Build a levels DataFrame from growth arrays (ref_date + index columns).
+
+    When *national* is provided, also includes ``ces_sa_level`` and
+    ``ces_nsa_level`` columns with actual BLS employment levels (thousands)
+    for converting index forecasts to jobs-added estimates.
+    """
     T = len(dates)
     base = 100.0
 
@@ -478,7 +540,7 @@ def _build_levels_from_growth(
     ces_nsa_index = cum_level(g_ces_nsa)
     qcew_nsa_index = cum_level(g_qcew)
 
-    d = {
+    d: dict = {
         "ref_date": dates,
         "ces_sa_index": ces_sa_index,
         "ces_nsa_index": ces_nsa_index,
@@ -486,5 +548,24 @@ def _build_levels_from_growth(
     }
     for pp in pp_data:
         d[pp["emp_col"]] = cum_level(pp["g_pp"])
+
+    def _emp_level_series(source: str) -> np.ndarray:
+        out = np.full(T, np.nan, dtype=float)
+        if national is None or "employment_level" not in national.columns:
+            return out
+        sub = (
+            national.filter(pl.col("source") == source)
+            .sort(pl.col("is_final").fill_null(False), "revision_number", descending=[True, True])
+            .unique(subset=["period"], keep="first")
+        )
+        for row in sub.iter_rows(named=True):
+            period = row["period"]
+            level = row["employment_level"]
+            if period in dates and level is not None and np.isfinite(level):
+                out[dates.index(period)] = float(level)
+        return out
+
+    d["ces_sa_level"] = _emp_level_series("ces_sa")
+    d["ces_nsa_level"] = _emp_level_series("ces_nsa")
 
     return pl.DataFrame(d)

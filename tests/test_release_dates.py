@@ -1,13 +1,18 @@
 """Tests for alt_nfp.ingest.release_dates — parser and vintage_dates."""
 
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.release_dates.config import PUBLICATIONS, Publication
+from alt_nfp.ingest.release_dates.config import (
+    PUBLICATIONS,
+    Publication,
+    RELEASE_DATES_PATH,
+    VINTAGE_DATES_PATH,
+)
 from alt_nfp.ingest.release_dates.parser import (
     parse_ref_from_path,
     parse_vintage_date,
@@ -16,6 +21,8 @@ from alt_nfp.ingest.release_dates.parser import (
 from alt_nfp.ingest.release_dates.vintage_dates import (
     CES_MONTHLY_REVISIONS,
     # SAE_MONTHLY_REVISIONS,
+    _ces_publication_date,
+    _qcew_publication_date,
     build_vintage_dates,
 )
 
@@ -190,3 +197,148 @@ class TestBuildVintageDates:
             ['publication', 'ref_date', 'vintage_date', 'revision', 'benchmark_revision']
         )
         assert result.equals(resorted)
+
+
+# ── Publication date heuristic validation ────────────────────────────────
+
+_HAS_RELEASE_DATES = RELEASE_DATES_PATH.exists()
+_HAS_VINTAGE_DATES = VINTAGE_DATES_PATH.exists()
+
+
+@pytest.mark.skipif(not _HAS_RELEASE_DATES, reason="release_dates.parquet not available")
+class TestPublicationDateHeuristics:
+    """Validate CES and QCEW date heuristics against scraped ground truth."""
+
+    # Ref dates where the first-Friday heuristic is known to be wrong due to
+    # Jul 4 holiday shift (BLS releases Thursday instead of second Friday),
+    # government shutdowns, or other documented irregularities.
+    _CES_KNOWN_EXCEPTIONS: set[date] = {
+        date(2008, 6, 12),   # Jul 4 2008 = Friday
+        date(2009, 8, 12),   # Delayed release (unknown cause)
+        date(2013, 9, 12),   # Oct 2013 government shutdown
+        date(2014, 6, 12),   # Jul 4 2014 = Friday
+        date(2025, 6, 12),   # Jul 4 2025 = Friday
+        date(2025, 9, 12),   # Oct 2025 government shutdown
+        date(2025, 11, 12),  # Released with Oct 2025 (shutdown catchup)
+    }
+
+    @pytest.fixture(scope="class")
+    def release_dates(self) -> pl.DataFrame:
+        return pl.read_parquet(RELEASE_DATES_PATH)
+
+    def test_ces_heuristic_within_7_days(self, release_dates: pl.DataFrame):
+        """CES first-Friday heuristic should be within 7 days of scraped date,
+        excluding known holiday/shutdown exceptions."""
+        ces = release_dates.filter(pl.col("publication") == "ces")
+        failures: list[str] = []
+        for row in ces.iter_rows(named=True):
+            ref = row["ref_date"]
+            if ref in self._CES_KNOWN_EXCEPTIONS:
+                continue
+            actual = row["vintage_date"]
+            heuristic = _ces_publication_date(ref.year, ref.month)
+            diff = abs((heuristic - actual).days)
+            if diff > 7:
+                failures.append(
+                    f"  ref={ref}, heuristic={heuristic}, actual={actual}, "
+                    f"diff={diff}d"
+                )
+        assert len(failures) == 0, (
+            f"{len(failures)} CES dates exceed 7-day tolerance:\n"
+            + "\n".join(failures[:10])
+        )
+
+    _QCEW_KNOWN_EXCEPTIONS: set[date] = {
+        date(2025, 6, 12),   # 2025 government shutdown delayed Q2 QCEW
+    }
+
+    def test_qcew_modern_heuristic_within_45_days(self, release_dates: pl.DataFrame):
+        """QCEW modern-era (2018+) lag heuristic should be within 45 days.
+
+        The heuristic targets the 1st of the publication month while
+        BLS typically publishes around the 20th, so a ~20-day systematic
+        offset is expected.  45-day tolerance accounts for that plus
+        normal scheduling variation.
+        """
+        qcew = release_dates.filter(
+            (pl.col("publication") == "qcew")
+            & (pl.col("ref_date") >= date(2018, 1, 1))
+        )
+        failures: list[str] = []
+        for row in qcew.iter_rows(named=True):
+            ref = row["ref_date"]
+            if ref in self._QCEW_KNOWN_EXCEPTIONS:
+                continue
+            actual = row["vintage_date"]
+            heuristic = _qcew_publication_date(ref.year, ref.month)
+            diff = abs((heuristic - actual).days)
+            if diff > 45:
+                failures.append(
+                    f"  ref={ref}, heuristic={heuristic}, actual={actual}, "
+                    f"diff={diff}d"
+                )
+        assert len(failures) == 0, (
+            f"{len(failures)} QCEW dates (2018+) exceed 45-day tolerance:\n"
+            + "\n".join(failures[:10])
+        )
+
+    def test_qcew_historical_lag_within_30_days(self, release_dates: pl.DataFrame):
+        """QCEW historical lag (7 months) should produce dates within 30 days
+        of actual publication for the pre-2013 scraped data.
+
+        The heuristic targets the 1st of the publication month; actual
+        publication is typically the 7th-24th.  A 30-day tolerance
+        confirms the month is correct.
+        """
+        from alt_nfp.ingest.release_dates.vintage_dates import (
+            _QCEW_HISTORICAL_PUBLICATION_LAG,
+        )
+
+        qcew = release_dates.filter(
+            (pl.col("publication") == "qcew")
+            & (pl.col("ref_date") < date(2013, 1, 1))
+        )
+        failures: list[str] = []
+        lag = _QCEW_HISTORICAL_PUBLICATION_LAG
+        for row in qcew.iter_rows(named=True):
+            ref = row["ref_date"]
+            actual = row["vintage_date"]
+            total = ref.month + lag
+            heur_year = ref.year + (total - 1) // 12
+            heur_month = ((total - 1) % 12) + 1
+            heuristic = date(heur_year, heur_month, 1)
+            diff = abs((heuristic - actual).days)
+            if diff > 30:
+                failures.append(
+                    f"  ref={ref}, heuristic={heuristic}, actual={actual}, "
+                    f"diff={diff}d"
+                )
+        assert len(failures) == 0, (
+            f"{len(failures)} QCEW historical dates exceed 30-day tolerance:\n"
+            + "\n".join(failures[:10])
+        )
+
+
+@pytest.mark.skipif(not _HAS_VINTAGE_DATES, reason="vintage_dates.parquet not available")
+class TestVintageDatesCoverage:
+    """Verify that vintage_dates.parquet covers the full 2003-present window."""
+
+    @pytest.fixture(scope="class")
+    def vintage_dates(self) -> pl.DataFrame:
+        return pl.read_parquet(VINTAGE_DATES_PATH)
+
+    def test_ces_starts_2003(self, vintage_dates: pl.DataFrame):
+        ces = vintage_dates.filter(pl.col("publication") == "ces")
+        min_ref = ces["ref_date"].min()
+        assert min_ref is not None
+        assert min_ref.year == 2003 and min_ref.month == 1, (
+            f"CES should start at 2003-01, got {min_ref}"
+        )
+
+    def test_qcew_starts_2003(self, vintage_dates: pl.DataFrame):
+        qcew = vintage_dates.filter(pl.col("publication") == "qcew")
+        min_ref = qcew["ref_date"].min()
+        assert min_ref is not None
+        assert min_ref.year == 2003 and min_ref.month == 3, (
+            f"QCEW should start at 2003-Q1 (March), got {min_ref}"
+        )
