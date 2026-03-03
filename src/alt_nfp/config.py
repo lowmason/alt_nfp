@@ -41,12 +41,24 @@ OUTPUT_DIR = BASE_DIR / "output"
 # LogNormal avoids the funnel geometry that HalfNormal creates when sigma
 # collapses toward zero (QCEW precision overwhelms all other sources).
 # mu/sigma are the parameters of the underlying Normal on log(sigma_qcew).
-LOG_SIGMA_QCEW_MID_MU = math.log(0.0005)  # M2 months — 90% prior ≈ [0.0003, 0.0008]
-LOG_SIGMA_QCEW_MID_SD = 0.3
+LOG_SIGMA_QCEW_MID_MU = math.log(0.0005)  # M2 months — 90% prior ≈ [0.0004, 0.0006]
+LOG_SIGMA_QCEW_MID_SD = 0.15  # tightened from 0.25 to keep posterior near 0.05%/mo
+
+# QCEW likelihood degrees of freedom (Student-t).
+# Fixed nu provides robustness to non-Gaussian QCEW error (NAICS
+# reclassification, timing mismatches) and reduces per-observation
+# precision by a factor of (nu+1)/(nu+3) vs Normal.
+QCEW_NU: int = 5
 LOG_SIGMA_QCEW_BOUNDARY_MU = math.log(0.002)  # M3+M1 months — 90% prior ≈ [0.0009, 0.0046]
 LOG_SIGMA_QCEW_BOUNDARY_SD = 0.5
 
-# QCEW publication lag in months (for structural BD error-correction term)
+# Fourier seasonal innovation: LogNormal priors (same rationale as QCEW sigmas —
+# HalfNormal allows sigma_fourier to collapse to zero, creating a boundary pathology).
+# mu is for k=1; higher harmonics subtract log(k) in model.py.
+LOG_SIGMA_FOURIER_MU = math.log(0.0003)  # k=1 mode ~0.00022
+LOG_SIGMA_FOURIER_SD = 0.5  # ~90% prior [0.00011, 0.00082] for k=1
+
+# QCEW publication lag in months (for BD proxy computation)
 BD_QCEW_LAG = 6
 
 # Fourier seasonal expansion: number of harmonics (K)
@@ -66,8 +78,6 @@ ERA_BREAKS: list[date] = [date(2009, 1, 1), date(2020, 1, 1)]
 # to monthly before centering.
 CYCLICAL_INDICATORS: list[dict] = [
     {'name': 'claims', 'fred_id': 'ICNSA', 'freq': 'weekly'},
-    {'name': 'nfci', 'fred_id': 'NFCI', 'freq': 'weekly'},
-    {'name': 'biz_apps', 'fred_id': 'BABATOTALSAUS', 'freq': 'monthly'},
     # JOLTS job openings.  Published ~2 months after reference period.
     # Revisions are small relative to cross-sectional variation (see JOLTS
     # revision assessment in national_model_spec.md §2.3.1): mean absolute

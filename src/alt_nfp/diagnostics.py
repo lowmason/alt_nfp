@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import OUTPUT_DIR
+from .config import OUTPUT_DIR, QCEW_NU
 
 # =========================================================================
 # Parameter summary & convergence
@@ -52,7 +52,6 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
         "sigma_fourier",
         "phi_0", "sigma_bd",
         *(["phi_1"] if "phi_1" in idata.posterior else []),
-        *(["phi_2"] if "phi_2" in idata.posterior else []),
         "alpha_ces", "lambda_ces", "sigma_ces_sa", "sigma_ces_nsa",
         *(
             ["sigma_qcew_mid", "sigma_qcew_boundary"]
@@ -115,12 +114,6 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
         print(
             f"  \u03c6_1 (birth rate):   {phi_1.mean():.3f}  "
             f"[{np.percentile(phi_1, 10):.3f}, {np.percentile(phi_1, 90):.3f}]"
-        )
-    if "phi_2" in idata.posterior:
-        phi_2 = idata.posterior["phi_2"].values.flatten()
-        print(
-            f"  \u03c6_2 (QCEW BD lag):  {phi_2.mean():.3f}  "
-            f"[{np.percentile(phi_2, 10):.3f}, {np.percentile(phi_2, 90):.3f}]"
         )
     print(f"  \u03c3_bd (innovation):  {sigma_bd.mean() * 100:.4f}%")
 
@@ -214,7 +207,9 @@ def _qcew_precision_by_tier(
         sigma_mid * qcew_noise_mult,
         sigma_boundary * qcew_noise_mult,
     )
-    prec_per_obs = 1.0 / (sigma_per_obs**2)
+    # Student-t Fisher information: (nu+1)/((nu+3)*sigma^2) vs Normal 1/sigma^2
+    studentt_factor = (QCEW_NU + 1) / (QCEW_NU + 3)
+    prec_per_obs = studentt_factor / (sigma_per_obs**2)
     total_prec_qcew = float(np.sum(prec_per_obs))
     n_m2 = int(qcew_is_m2.sum())
     n_boundary = n_obs - n_m2
@@ -503,7 +498,8 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
             sigma_mid * qcew_noise_mult,
             sigma_boundary * qcew_noise_mult,
         )
-        prec_per = 1.0 / (sigma_per**2)
+        studentt_factor = (QCEW_NU + 1) / (QCEW_NU + 3)
+        prec_per = studentt_factor / (sigma_per**2)
         total_qcew = float(np.sum(prec_per[in_era]))
         n_qcew_m2 = int((in_era & qcew_is_m2).sum())
         n_qcew_boundary = int((in_era & ~qcew_is_m2).sum())

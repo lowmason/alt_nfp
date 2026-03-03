@@ -27,14 +27,12 @@ from alt_nfp.panel_adapter import (
 class TestCyclicalIndicatorsConfig:
     """Verify CYCLICAL_INDICATORS config entries."""
 
-    def test_four_indicators_configured(self):
-        assert len(CYCLICAL_INDICATORS) == 4
+    def test_two_indicators_configured(self):
+        assert len(CYCLICAL_INDICATORS) == 2
 
     def test_indicator_names(self):
         names = [spec["name"] for spec in CYCLICAL_INDICATORS]
         assert "claims" in names
-        assert "nfci" in names
-        assert "biz_apps" in names
         assert "jolts" in names
 
     def test_each_has_required_keys(self):
@@ -47,8 +45,6 @@ class TestCyclicalIndicatorsConfig:
     def test_fred_ids(self):
         by_name = {s["name"]: s for s in CYCLICAL_INDICATORS}
         assert by_name["claims"]["fred_id"] == "ICNSA"
-        assert by_name["nfci"]["fred_id"] == "NFCI"
-        assert by_name["biz_apps"]["fred_id"] == "BABATOTALSAUS"
         assert by_name["jolts"]["fred_id"] == "JTSJOL"
 
 
@@ -63,12 +59,6 @@ class TestPublicationLags:
 
     def test_claims_lag(self):
         assert _CYCLICAL_PUBLICATION_LAGS["claims"] == 1
-
-    def test_nfci_lag(self):
-        assert _CYCLICAL_PUBLICATION_LAGS["nfci"] == 1
-
-    def test_biz_apps_lag(self):
-        assert _CYCLICAL_PUBLICATION_LAGS["biz_apps"] == 2
 
     def test_jolts_lag(self):
         assert _CYCLICAL_PUBLICATION_LAGS["jolts"] == 2
@@ -107,14 +97,14 @@ class TestLoadCyclicalIndicators:
     def test_loads_monthly_parquet(self, tmp_path, monkeypatch):
         """Monthly parquet should load and center correctly."""
         ind_dir = tmp_path / "indicators"
-        self._write_monthly_parquet(ind_dir, "biz_apps")
+        self._write_monthly_parquet(ind_dir, "jolts")
         monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
         dates = [date(2020 + (i // 12), (i % 12) + 1, 1) for i in range(60)]
         result = _load_cyclical_indicators(dates, len(dates))
 
-        assert "biz_apps_c" in result
-        arr = result["biz_apps_c"]
+        assert "jolts_c" in result
+        arr = result["jolts_c"]
         assert arr is not None
         assert arr.shape == (60,)
         nonzero = arr[arr != 0.0]
@@ -162,12 +152,10 @@ class TestLoadCyclicalIndicators:
         assert arr is not None
         assert arr.shape == (60,)
 
-    def test_all_four_indicators_load(self, tmp_path, monkeypatch):
-        """All four indicators should load when all files present."""
+    def test_all_indicators_load(self, tmp_path, monkeypatch):
+        """All configured indicators should load when all files present."""
         ind_dir = tmp_path / "indicators"
         self._write_weekly_parquet(ind_dir, "claims")
-        self._write_weekly_parquet(ind_dir, "nfci")
-        self._write_monthly_parquet(ind_dir, "biz_apps")
         self._write_monthly_parquet(ind_dir, "jolts")
         monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
@@ -283,24 +271,6 @@ class TestDataCoverage:
         df = pl.read_parquet(INDICATORS_DIR / "claims.parquet")
         min_date = df["ref_date"].min()
         assert min_date.year <= 2003, f"Claims should start by 2003, got {min_date}"
-
-    @pytest.mark.skipif(
-        not (INDICATORS_DIR / "nfci.parquet").exists(),
-        reason="nfci.parquet not available",
-    )
-    def test_nfci_coverage(self):
-        df = pl.read_parquet(INDICATORS_DIR / "nfci.parquet")
-        min_date = df["ref_date"].min()
-        assert min_date.year <= 2003, f"NFCI should start by 2003, got {min_date}"
-
-    @pytest.mark.skipif(
-        not (INDICATORS_DIR / "biz_apps.parquet").exists(),
-        reason="biz_apps.parquet not available",
-    )
-    def test_bfs_coverage(self):
-        df = pl.read_parquet(INDICATORS_DIR / "biz_apps.parquet")
-        min_date = df["ref_date"].min()
-        assert min_date.year <= 2005, f"BFS should start by 2005, got {min_date}"
 
     @pytest.mark.skipif(
         not (INDICATORS_DIR / "jolts.parquet").exists(),

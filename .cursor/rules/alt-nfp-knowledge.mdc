@@ -6,20 +6,32 @@ alwaysApply: true
 # alt_nfp Project Knowledge
 
 ## QCEW observation noise
+- **Student-t likelihood**: QCEW uses `pm.StudentT` with fixed `nu = QCEW_NU` (default 5, in `config.py`). Heavier tails provide robustness to non-Gaussian QCEW error (NAICS reclassification, timing mismatches) and reduce per-observation precision by a factor of `(nu+1)/(nu+3)` vs Normal (0.75 at nu=5).
 - **Two tiers**: M2 months (Feb, May, Aug, Nov) use `sigma_qcew_mid`; M3 and M1 (incl. January) use `sigma_qcew_boundary`. Per-obs sigma = base × `qcew_noise_mult` from `revision_schedules.get_noise_multiplier("qcew_Q1".."qcew_Q4", rev)`.
+- **M2 prior tightened**: `LOG_SIGMA_QCEW_MID_SD = 0.15` (was 0.25) constrains the posterior to stay near the 0.05%/mo center, preventing extreme precision dominance.
 - Data dict uses `qcew_is_m2` and `qcew_noise_mult` (not `qcew_is_m3`). Diagnostics use "QCEW (M2)" and "QCEW (M3+M1)".
 - Empirical multiplier calibration uses **2017+** only (not earlier revisions).
 
+## LogNormal priors (avoiding zero-boundary funnels)
+- All small-sigma parameters use **LogNormal** priors (not HalfNormal) to prevent collapse toward zero: `sigma_qcew_mid`, `sigma_qcew_boundary`, `sigma_fourier`.
+- Config constants: `LOG_SIGMA_QCEW_MID_MU`/`_SD`, `LOG_SIGMA_QCEW_BOUNDARY_MU`/`_SD`, `LOG_SIGMA_FOURIER_MU`/`_SD`.
+- `sigma_fourier` uses `LOG_SIGMA_FOURIER_MU - log(k)` for harmonic k (1/k scaling in log-space).
+
 ## Provider data
 - Provider series (e.g. G) can start mid-sample (e.g. 2019-01). Birth-rate and provider growth means are computed **only over the window where that provider has data** to avoid empty-slice warnings and wrong priors.
-- Config: `LOG_SIGMA_QCEW_MID_MU`/`_SD`, `LOG_SIGMA_QCEW_BOUNDARY_MU`/`_SD` (LogNormal log-space params); no `SIGMA_QCEW_M3`/`M12`.
+
+## Structural BD model
+- `bd_t = φ₀ + φ₁·birth_rate_c + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, jolts]`.
+- `φ₂` (QCEW BD lag) was removed — posterior was indistinguishable from zero. `bd_qcew_c` still computed in `panel_adapter.py` for the BD diagnostic scatter plot.
+- NFCI and biz_apps were removed from `CYCLICAL_INDICATORS` — posteriors were zero. Only claims and JOLTS remain.
 
 ## Forecast and levels
 - `forecast.py` expects `data["levels"]` with columns: `ref_date`, `ces_sa_index`, `ces_nsa_index`, `ces_sa_level`, `ces_nsa_level`, and each provider’s `emp_col`. If `ces_sa_level`/`ces_nsa_level` are missing (e.g. national panel without `employment_level`), forecast will raise `ColumnNotFoundError`; ensure `panel_to_model_data()` is called with a national panel that has employment levels when forecast is run.
 
 ## Diagnostics
-- Precision budget and source contributions use `_qcew_precision_by_tier(idata, data)` with posterior `sigma_qcew_mid`/`sigma_qcew_boundary` and `qcew_is_m2`/`qcew_noise_mult`.
+- Precision budget and source contributions use `_qcew_precision_by_tier(idata, data)` with posterior `sigma_qcew_mid`/`sigma_qcew_boundary` and `qcew_is_m2`/`qcew_noise_mult`. QCEW precision uses Student-t Fisher information: `(QCEW_NU+1)/((QCEW_NU+3)*sigma^2)`.
 - Era-specific: `print_windowed_precision_budget()`, `print_provider_value_of_information()` (same-era comparison for g_cont HDI width with/without provider).
+- Standardised residuals: CES/provider residuals should be ~N(0,1); QCEW residuals follow t(nu) under the Student-t likelihood.
 
 ## CES vintage selection
 - **V3 uses actual 3rd prints only** (`revision_number=2, benchmark_revision=0`). Benchmark-revised rows (`revision_number=-1` or `benchmark_revision>0`) are never used as CES observations. Benchmark information enters the model exclusively through QCEW.

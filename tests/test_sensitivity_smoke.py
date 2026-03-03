@@ -43,8 +43,6 @@ class TestBuildParamSpecs:
         data = {
             "pp_data": [],
             "claims_c": np.zeros(10),
-            "nfci_c": np.zeros(10),
-            "biz_apps_c": np.zeros(10),
             "jolts_c": np.zeros(10),
         }
         specs = _build_param_specs(data)
@@ -59,12 +57,9 @@ class TestBuildParamSpecs:
         data = {
             "pp_data": [],
             "claims_c": np.ones(10),
-            "nfci_c": np.ones(10),
-            "biz_apps_c": np.ones(10),
             "jolts_c": np.ones(10),
         }
         specs = _build_param_specs(data)
         names = [s[0] for s in specs]
-        # Should have phi_3 entries for all 4 indicators
         phi3_entries = [n for n in names if "φ_3" in n]
-        assert len(phi3_entries) == 4
+        assert len(phi3_entries) == 2

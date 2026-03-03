@@ -5,8 +5,8 @@ Builds a hierarchical Bayesian model with the following components:
 1. **Latent continuing-units growth** — AR(1) process with mean reversion.
 2. **Fourier seasonal** — annually-evolving harmonic amplitudes via
    Gaussian random walk.
-3. **Structural birth/death** — time-varying offset driven by birth-rate,
-   lagged QCEW BD proxy, and optional cyclical demand indicators.
+3. **Structural birth/death** — time-varying offset driven by birth-rate
+   and optional cyclical demand indicators (claims, JOLTS).
 4. **QCEW likelihood** — near-census truth anchor with estimated base noise
    by tier (M2 vs M3+M1) and per-observation revision multipliers.
 5. **CES likelihood** — vintage-specific noise (1st print, 2nd print,
@@ -24,12 +24,15 @@ import pytensor.tensor as pt
 
 from .config import (
     CYCLICAL_INDICATORS,
+    LOG_SIGMA_FOURIER_MU,
+    LOG_SIGMA_FOURIER_SD,
     LOG_SIGMA_QCEW_BOUNDARY_MU,
     LOG_SIGMA_QCEW_BOUNDARY_SD,
     LOG_SIGMA_QCEW_MID_MU,
     LOG_SIGMA_QCEW_MID_SD,
     N_ERAS,
     N_HARMONICS,
+    QCEW_NU,
 )
 
 
@@ -46,7 +49,7 @@ def build_model(data: dict) -> pm.Model:
     * Provider likelihoods are generated in a loop driven by
       ``data['pp_data']`` / ``ProviderConfig``.
     * Birth/death is time-varying:
-      ``bd_t = φ₀ + φ₁·birth_rate_c + φ₂·bd_qcew_c + σ_bd·ξ_t``
+      ``bd_t = φ₀ + φ₁·birth_rate_c + φ₃·X^cycle + σ_bd·ξ_t``
     * QCEW observation noise: two estimated base sigmas (M2 vs M3+M1)
       times per-observation revision multiplier from ``data['qcew_noise_mult']``.
     """
@@ -142,10 +145,13 @@ def build_model(data: dict) -> pm.Model:
         n_years = data['n_years']
         year_of_obs = data['year_of_obs']
 
-        # Innovation std per harmonic (decreasing with k)
-        sigma_fourier = pm.HalfNormal(
+        # Innovation std per harmonic (decreasing with k in log-space).
+        # LogNormal avoids the zero-boundary pathology of HalfNormal.
+        sigma_fourier_mu = LOG_SIGMA_FOURIER_MU - np.log(np.arange(1, K + 1))
+        sigma_fourier = pm.LogNormal(
             'sigma_fourier',
-            sigma=0.005 / np.arange(1, K + 1),
+            mu=sigma_fourier_mu,
+            sigma=LOG_SIGMA_FOURIER_SD,
             shape=K,
         )
 
@@ -176,8 +182,7 @@ def build_model(data: dict) -> pm.Model:
         # =============================================================
         # Structural birth/death offset
         #
-        #   bd_t = φ_0 + φ_1·birth_rate_c + φ_2·bd_qcew_c
-        #          + φ_3 · X^cycle + σ_bd · ξ_t
+        #   bd_t = φ_0 + φ_1·birth_rate_c + φ_3·X^cycle + σ_bd·ξ_t
         #
         # Covariates are centred so φ_0 ≈ mean BD at average covariate
         # values.  Where a covariate is unavailable (early sample or
@@ -193,13 +198,9 @@ def build_model(data: dict) -> pm.Model:
         bd_t = phi_0 + sigma_bd * xi_bd
 
         has_birth = np.any(data["birth_rate_c"] != 0.0)
-        has_bd_qcew = np.any(data["bd_qcew_c"] != 0.0)
         if has_birth:
             phi_1 = pm.Normal("phi_1", mu=0.5, sigma=0.5)
             bd_t = bd_t + phi_1 * pt.as_tensor_variable(data["birth_rate_c"])
-        if has_bd_qcew:
-            phi_2 = pm.Normal("phi_2", mu=0.3, sigma=0.3)
-            bd_t = bd_t + phi_2 * pt.as_tensor_variable(data["bd_qcew_c"])
 
         # Cyclical indicators (demand-side BD covariates)
         cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]
@@ -234,8 +235,9 @@ def build_model(data: dict) -> pm.Model:
         # QCEW likelihood — TRUTH ANCHOR
         # =============================================================
 
-        pm.Normal(
+        pm.StudentT(
             "obs_qcew",
+            nu=QCEW_NU,
             mu=g_total_nsa[data["qcew_obs"]],
             sigma=qcew_sigma,
             observed=data["g_qcew"][data["qcew_obs"]],

@@ -142,8 +142,6 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
     specs.append(("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"))
     if np.any(data.get("birth_rate_c", np.zeros(1)) != 0.0):
         specs.append(("\u03c6_1 (birth)", "phi_1", None, 1, ".3f"))
-    if np.any(data.get("bd_qcew_c", np.zeros(1)) != 0.0):
-        specs.append(("\u03c6_2 (QCEW lag)", "phi_2", None, 1, ".3f"))
     specs.append(("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"))
     # Cyclical indicator loadings (phi_3) if available
     from .config import CYCLICAL_INDICATORS

@@ -1,9 +1,8 @@
 """Forward simulation and employment forecast plots.
 
 :func:`forecast_and_plot` draws forward trajectories from the posterior,
-propagating the AR(1) continuing-units growth, structural BD offset
-(with QCEW lag error-correction), and last-year Fourier seasonal
-coefficients.  Outputs include:
+propagating the AR(1) continuing-units growth, structural BD offset,
+and last-year Fourier seasonal coefficients.  Outputs include:
 
 * Index-level forecast (SA and NSA) with 80 % HDI fan charts.
 * Month-over-month jobs-added forecast with annotated point estimates.
@@ -20,7 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import BD_QCEW_LAG, N_HARMONICS, OUTPUT_DIR
+from .config import N_HARMONICS, OUTPUT_DIR
 
 
 def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
@@ -46,7 +45,6 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
     # Structural BD parameters
     phi_0_post = idata.posterior["phi_0"].values
     phi_1_post = idata.posterior["phi_1"].values if "phi_1" in idata.posterior else 0.0
-    phi_2_post = idata.posterior["phi_2"].values if "phi_2" in idata.posterior else 0.0
     sigma_bd_post = idata.posterior["sigma_bd"].values
 
     n_chains, n_draws, T_hist = g_cont_post.shape
@@ -70,8 +68,6 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
     # --- BD forward-propagation covariates ---
     birth_rate = data["birth_rate"]
     birth_rate_mean = data["birth_rate_mean"]
-    bd_proxy = data["bd_proxy"]
-    bd_qcew_mean = data["bd_qcew_mean"]
 
     # Last observed birth rate (centred)
     finite_br = np.where(np.isfinite(birth_rate))[0]
@@ -91,18 +87,10 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
         g_cont_fwd[:, :, h] = mu_g_post + phi_post * (g_prev - mu_g_post) + sigma_g_post * eps
 
         # Structural BD
-        # QCEW BD proxy: use t-L if still in historical window
-        t_lag = T_hist + h - BD_QCEW_LAG
-        if 0 <= t_lag < T_hist and np.isfinite(bd_proxy[t_lag]):
-            fwd_bd_qcew_c = bd_proxy[t_lag] - bd_qcew_mean
-        else:
-            fwd_bd_qcew_c = 0.0
-
         eps_bd = rng.standard_normal((n_chains, n_draws))
         bd_fwd[:, :, h] = (
             phi_0_post
             + phi_1_post * birth_rate_last_c
-            + phi_2_post * fwd_bd_qcew_c
             + sigma_bd_post * eps_bd
         )
 

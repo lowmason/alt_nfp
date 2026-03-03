@@ -2,8 +2,10 @@
 
 :func:`plot_residuals` computes and plots standardised residuals for every
 data source (CES vintage-specific, each payroll provider, QCEW).  Under a
-well-specified model the residuals should be approximately iid *N*(0, 1);
-temporal patterns or heavy tails signal misfit.
+well-specified model, CES and provider residuals should be approximately
+iid *N*(0, 1).  QCEW uses a Student-t likelihood (nu = ``QCEW_NU``), so
+its standardised residuals follow *t*(nu) rather than *N*(0, 1) — slightly
+heavier tails are expected.  Temporal patterns signal misfit for all sources.
 
 For providers with AR(1) error structures the residuals are pre-whitened
 (innovation residuals) so that serial correlation has been removed.
@@ -147,7 +149,7 @@ def plot_residuals(idata: az.InferenceData, data: dict) -> None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
     fig.suptitle(
-        "Standardised Residuals by Source (should be approx. N(0,1))",
+        "Standardised Residuals by Source (CES/PP: N(0,1); QCEW: t(nu))",
         fontsize=13, fontweight="bold",
     )
     plt.tight_layout()

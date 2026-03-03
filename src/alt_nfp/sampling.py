@@ -21,7 +21,7 @@ DEFAULT_SAMPLER_KWARGS: dict = dict(
     draws=8000,
     tune=6000,
     chains=4,
-    target_accept=0.97,
+    target_accept=0.99,
     return_inferencedata=True,
 )
 

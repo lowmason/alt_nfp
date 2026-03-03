@@ -292,35 +292,28 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
         phi_1_m = idata.posterior["phi_1"].values.flatten().mean()
         c_phi1 = phi_1_m * data["birth_rate_c"] * 100
         ax.plot(dates, c_phi1, lw=1.2, label="\u03c6\u2081\u00b7birth_rate", color="#2ca02c")
-    if "phi_2" in idata.posterior:
-        phi_2_m = idata.posterior["phi_2"].values.flatten().mean()
-        c_phi2 = phi_2_m * data["bd_qcew_c"] * 100
-        ax.plot(dates, c_phi2, lw=1.2, label="\u03c6\u2082\u00b7QCEW_lag", color="#d62728")
+    # Cyclical contributions (derived from CYCLICAL_INDICATORS config)
+    from .config import CYCLICAL_INDICATORS
 
-    # Cyclical contributions
-    cyclical_keys = ['claims_c', 'nfci_c', 'biz_apps_c']
-    cyclical_labels = ['claims', 'nfci', 'biz_apps']
-    cyclical_colors = ['#9467bd', '#ff7f0e', '#17becf']
+    _cyc_colors = ['#9467bd', '#ff7f0e', '#17becf', '#d62728', '#8c564b']
+    cyc_contribs = np.zeros(len(dates))
     if "phi_3" in idata.posterior:
         phi_3_m = idata.posterior["phi_3"].values.mean(axis=(0, 1))  # (n_cyc,)
         cyc_i = 0
-        for key, lbl, clr in zip(cyclical_keys, cyclical_labels, cyclical_colors, strict=False):
+        for ci, spec in enumerate(CYCLICAL_INDICATORS):
+            key = f"{spec['name']}_c"
             arr = data.get(key)
             if arr is not None and np.any(arr != 0.0):
                 contrib = phi_3_m[cyc_i] * arr * 100
-                ax.plot(dates, contrib, lw=1.2, label=f"\u03c6\u2083\u00b7{lbl}", color=clr)
+                clr = _cyc_colors[ci % len(_cyc_colors)]
+                ax.plot(dates, contrib, lw=1.2,
+                        label=f"\u03c6\u2083\u00b7{spec['name']}", color=clr)
+                cyc_contribs += contrib
                 cyc_i += 1
 
     # Residual (innovation)
-    xi_bd_m = (bd_mean * 100 - c_phi0 - c_phi1 - c_phi2)
-    # Subtract cyclical if present
-    if "phi_3" in idata.posterior:
-        cyc_i = 0
-        for key in cyclical_keys:
-            arr = data.get(key)
-            if arr is not None and np.any(arr != 0.0):
-                xi_bd_m = xi_bd_m - phi_3_m[cyc_i] * arr * 100
-                cyc_i += 1
+    c_phi1 = c_phi1 if "phi_1" in idata.posterior else np.zeros(len(dates))
+    xi_bd_m = bd_mean * 100 - c_phi0 - c_phi1 - cyc_contribs
     ax.plot(dates, xi_bd_m, lw=0.8, alpha=0.5, label="\u03c3_bd\u00b7\u03be (residual)",
             color="lightgray")
 
