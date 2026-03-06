@@ -1,4 +1,0 @@
-/Users/lowell/Projects/alt_nfp/.venv/lib/python3.12/site-packages/pytensor/link/numba/dispatch/basic.py:226: UserWarning: Numba will use object mode to run AdvancedIncSubtensor's perform method. Set `pytensor.config.compiler_verbose = True` to see more details.
-  warnings.warn(
-/Users/lowell/Projects/alt_nfp/.venv/lib/python3.12/site-packages/pytensor/link/numba/dispatch/basic.py:226: UserWarning: Numba will use object mode to run AdvancedIncSubtensor's perform method. Set `pytensor.config.compiler_verbose = True` to see more details.
-  warnings.warn(

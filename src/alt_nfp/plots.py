@@ -119,10 +119,6 @@ def plot_growth_and_seasonal(idata: az.InferenceData, data: dict) -> None:
     # Evaluate seasonal for each posterior draw at each of the 12 months
     A_last = last_yr_coefs[:, :, :K]   # (chains, draws, K)
     B_last = last_yr_coefs[:, :, K:]   # (chains, draws, K)
-    # s_12: (chains, draws, 12)
-    s_12 = np.einsum('mk,cdl->cdm', cos_basis_12, A_last) \
-        + np.einsum('mk,cdl->cdm', sin_basis_12, B_last)
-    # Fix: use explicit loop for clarity since K dimension must contract
     s_12 = np.zeros((*A_last.shape[:2], 12))
     for m in range(12):
         for k in range(K):
@@ -241,10 +237,9 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
     bd_lo = np.percentile(bd_post, 10, axis=(0, 1))
     bd_hi = np.percentile(bd_post, 90, axis=(0, 1))
 
-    birth_rate = data["birth_rate"]
     bd_qcew_lagged = data["bd_qcew_lagged"]
 
-    n_panels = 4
+    n_panels = 3
     fig, axes = plt.subplots(n_panels, 1, figsize=(14, 4 * n_panels))
 
     # Panel 1: bd_t time series
@@ -258,20 +253,8 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
     ax.legend(fontsize=8)
     _year_axis(ax)
 
-    # Panel 2: bd_t vs birth rate
+    # Panel 2: bd_t vs lagged QCEW BD proxy
     ax = axes[1]
-    br_obs = np.isfinite(birth_rate)
-    if br_obs.any():
-        ax.scatter(birth_rate[br_obs] * 100, bd_mean[br_obs] * 100, s=8, c="steelblue",
-                   alpha=0.6)
-        ax.set_xlabel("PP birth rate (%)")
-        ax.set_ylabel("bd_t (%/mo)")
-        ax.set_title("BD Offset vs PP Birth Rate")
-    else:
-        ax.set_visible(False)
-
-    # Panel 3: bd_t vs lagged QCEW BD proxy
-    ax = axes[2]
     bq_obs = np.isfinite(bd_qcew_lagged)
     if bq_obs.any():
         ax.scatter(bd_qcew_lagged[bq_obs] * 100, bd_mean[bq_obs] * 100, s=8,
@@ -282,16 +265,12 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
     else:
         ax.set_visible(False)
 
-    # Panel 4: BD covariate decomposition
-    ax = axes[3]
+    # Panel 3: BD covariate decomposition
+    ax = axes[2]
     phi_0_m = idata.posterior["phi_0"].values.flatten().mean()
     c_phi0 = np.full(len(dates), phi_0_m * 100)
     ax.plot(dates, c_phi0, lw=1.2, label="\u03c6\u2080 (intercept)", color="gray", ls="--")
 
-    if "phi_1" in idata.posterior:
-        phi_1_m = idata.posterior["phi_1"].values.flatten().mean()
-        c_phi1 = phi_1_m * data["birth_rate_c"] * 100
-        ax.plot(dates, c_phi1, lw=1.2, label="\u03c6\u2081\u00b7birth_rate", color="#2ca02c")
     # Cyclical contributions (derived from CYCLICAL_INDICATORS config)
     from .config import CYCLICAL_INDICATORS
 
@@ -312,8 +291,7 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
                 cyc_i += 1
 
     # Residual (innovation)
-    c_phi1 = c_phi1 if "phi_1" in idata.posterior else np.zeros(len(dates))
-    xi_bd_m = bd_mean * 100 - c_phi0 - c_phi1 - cyc_contribs
+    xi_bd_m = bd_mean * 100 - c_phi0 - cyc_contribs
     ax.plot(dates, xi_bd_m, lw=0.8, alpha=0.5, label="\u03c3_bd\u00b7\u03be (residual)",
             color="lightgray")
 

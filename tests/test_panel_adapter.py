@@ -63,17 +63,26 @@ class TestPanelToModelData:
         data = model_data
         T = data["T"]
         assert data["birth_rate"].shape == (T,)
-        assert data["birth_rate_c"].shape == (T,)
         assert data["bd_qcew_lagged"].shape == (T,)
-        assert data["bd_qcew_c"].shape == (T,)
 
-    def test_vintage_arrays(self, model_data):
+    def test_vintage_index_arrays(self, model_data):
         data = model_data
-        T = data["T"]
-        for v_list in (data["g_ces_sa_by_vintage"], data["g_ces_nsa_by_vintage"]):
-            assert len(v_list) == 3
-            for arr in v_list:
-                assert arr.shape == (T,)
+        n_v = data["n_ces_vintages"]
+        assert isinstance(n_v, int)
+        assert n_v >= 1
+        vmap = data["ces_vintage_map"]
+        assert isinstance(vmap, dict)
+        assert all(orig in {0, 1, 2} for orig in vmap.keys())
+        assert set(vmap.values()) == set(range(n_v))
+        for obs_key, vidx_key in [
+            ("ces_sa_obs", "ces_sa_vintage_idx"),
+            ("ces_nsa_obs", "ces_nsa_vintage_idx"),
+        ]:
+            obs = data[obs_key]
+            vidx = data[vidx_key]
+            assert vidx.shape == obs.shape
+            if len(vidx) > 0:
+                assert set(np.unique(vidx)).issubset(set(range(n_v)))
 
     def test_levels_dataframe(self, model_data):
         data = model_data

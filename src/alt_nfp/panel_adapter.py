@@ -20,6 +20,8 @@ from .config import (
     ERA_BREAKS,
     INDICATORS_DIR,
     PP_COLORS,
+    QCEW_POST_COVID_BOUNDARY_ERA_DEFAULT,
+    QCEW_POST_COVID_BOUNDARY_ERA_MULT,
     ProviderConfig,
 )
 from .ingest.payroll import load_provider_series
@@ -30,8 +32,6 @@ _PROVIDER_PUBLICATION_LAG_WEEKS = 3
 
 _CYCLICAL_PUBLICATION_LAGS: dict[str, int] = {
     "claims": 1,      # Weekly initial jobless claims — ~1 week lag, rounded to 1 month
-    "nfci": 1,         # Chicago Fed NFCI — ~1 week lag, rounded to 1 month
-    "biz_apps": 2,     # Census Business Formation Statistics — ~2 month lag
     "jolts": 2,        # BLS JOLTS job openings — ~2 month lag
 }
 
@@ -174,19 +174,8 @@ def panel_to_model_data(
                 period_to_rev[period] = int(rev) if rev is not None else 0
         return out, period_to_rev
 
-    g_ces_sa = _growth_series("ces_sa")
-    g_ces_nsa = _growth_series("ces_nsa")
     g_qcew, qcew_period_to_revision = _qcew_series_with_meta(national, dates, T)
 
-    if censor_ces_from is not None and as_of is None:
-        for i, d in enumerate(dates):
-            if d >= censor_ces_from:
-                g_ces_sa[i:] = np.nan
-                g_ces_nsa[i:] = np.nan
-                break
-
-    ces_sa_obs = np.where(np.isfinite(g_ces_sa))[0]
-    ces_nsa_obs = np.where(np.isfinite(g_ces_nsa))[0]
     qcew_obs = np.where(np.isfinite(g_qcew))[0]
     # M2 = quarter-interior months (Feb, May, Aug, Nov); boundary = M3 + M1
     qcew_is_m2 = np.array([dates[i].month in (2, 5, 8, 11) for i in qcew_obs])
@@ -201,46 +190,79 @@ def panel_to_model_data(
         dtype=float,
     )
 
-    # CES by vintage: v1=rev 0, v2=rev 1, v3=rev 2 (actual 3rd print, not benchmark)
-    def _vintage_series(source: str, rev_values: tuple[int, ...]) -> np.ndarray:
-        out = np.full(T, np.nan, dtype=float)
-        sub = national.filter(
-            (pl.col("source") == source) & pl.col("revision_number").is_in(list(rev_values))
-        )
+    # Era-specific boundary multiplier: inflate noise for post-COVID M1+M3
+    for j, i in enumerate(qcew_obs):
+        if qcew_is_m2[j]:
+            continue
+        if _date_to_era(dates[i]) >= 1:  # Post-COVID
+            rev = int(qcew_period_to_revision.get(dates[i], 0))
+            era_mult = QCEW_POST_COVID_BOUNDARY_ERA_MULT.get(
+                rev, QCEW_POST_COVID_BOUNDARY_ERA_DEFAULT
+            )
+            qcew_noise_mult[j] *= era_mult
+
+    # CES best-available: one obs per month using the latest print.
+    # Track which vintage (0=1st, 1=2nd, 2=final) each obs came from.
+    def _ces_best_available(source: str) -> tuple[np.ndarray, np.ndarray]:
+        """Return (growth, vintage_idx) arrays of length T.
+
+        growth[t] = best-available growth for month t (NaN if missing).
+        vintage_idx[t] = revision number (0/1/2) selected, or -1 if missing.
+        """
+        growth = np.full(T, np.nan, dtype=float)
+        vidx = np.full(T, -1, dtype=int)
+        sub = national.filter(pl.col("source") == source)
         if len(sub) == 0:
-            return out
-        sub = sub.unique(subset=["period"], keep="first")
-        for row in sub.iter_rows(named=True):
+            return growth, vidx
+        by_period = (
+            sub.filter(pl.col("revision_number").is_in([0, 1, 2]))
+            .sort("revision_number", descending=True)
+            .unique(subset=["period"], keep="first")
+        )
+        for row in by_period.iter_rows(named=True):
             period = row["period"]
-            growth = row["growth"]
-            if period in dates and growth is not None and np.isfinite(growth):
-                out[dates.index(period)] = float(growth)
-        return out
+            g = row["growth"]
+            rev = row.get("revision_number")
+            if period in dates and g is not None and np.isfinite(g):
+                idx = dates.index(period)
+                growth[idx] = float(g)
+                vidx[idx] = int(rev) if rev is not None else 2
+        return growth, vidx
 
-    g_ces_sa_v1 = _vintage_series("ces_sa", (0,))
-    g_ces_sa_v2 = _vintage_series("ces_sa", (1,))
-    g_ces_sa_v3 = _vintage_series("ces_sa", (2,))
-    g_ces_nsa_v1 = _vintage_series("ces_nsa", (0,))
-    g_ces_nsa_v2 = _vintage_series("ces_nsa", (1,))
-    g_ces_nsa_v3 = _vintage_series("ces_nsa", (2,))
+    g_ces_sa, ces_sa_full_vidx = _ces_best_available("ces_sa")
+    g_ces_nsa, ces_nsa_full_vidx = _ces_best_available("ces_nsa")
 
-    has_ces_vintage = (
-        np.any(np.isfinite(g_ces_sa_v1)) or np.any(np.isfinite(g_ces_sa_v2))
-        or np.any(np.isfinite(g_ces_nsa_v1)) or np.any(np.isfinite(g_ces_nsa_v2))
+    if censor_ces_from is not None and as_of is None:
+        for i, d in enumerate(dates):
+            if d >= censor_ces_from:
+                g_ces_sa[i:] = np.nan
+                g_ces_nsa[i:] = np.nan
+                ces_sa_full_vidx[i:] = -1
+                ces_nsa_full_vidx[i:] = -1
+                break
+
+    ces_sa_obs = np.where(np.isfinite(g_ces_sa))[0]
+    ces_nsa_obs = np.where(np.isfinite(g_ces_nsa))[0]
+    ces_sa_vintage_idx_raw = ces_sa_full_vidx[ces_sa_obs]
+    ces_nsa_vintage_idx_raw = ces_nsa_full_vidx[ces_nsa_obs]
+
+    # Remap vintage indices to contiguous 0-based range so sigma_ces has
+    # only as many elements as there are observed vintages (avoids ghost
+    # parameters for vintages with zero observations).
+    _all_vintages = sorted(
+        set(ces_sa_vintage_idx_raw.tolist()) | set(ces_nsa_vintage_idx_raw.tolist())
     )
-    g_ces_sa_by_vintage = [g_ces_sa_v1, g_ces_sa_v2, g_ces_sa_v3]
-    g_ces_nsa_by_vintage = [g_ces_nsa_v1, g_ces_nsa_v2, g_ces_nsa_v3]
-    if not has_ces_vintage:
-        g_ces_sa_by_vintage = [
-            np.full(T, np.nan),
-            np.full(T, np.nan),
-            g_ces_sa.copy(),
-        ]
-        g_ces_nsa_by_vintage = [
-            np.full(T, np.nan),
-            np.full(T, np.nan),
-            g_ces_nsa.copy(),
-        ]
+    if not _all_vintages:
+        _all_vintages = [2]  # fallback: at least Final
+    ces_vintage_map: dict[int, int] = {v: i for i, v in enumerate(_all_vintages)}
+    n_ces_vintages = len(_all_vintages)
+
+    ces_sa_vintage_idx = np.array(
+        [ces_vintage_map[v] for v in ces_sa_vintage_idx_raw], dtype=int
+    )
+    ces_nsa_vintage_idx = np.array(
+        [ces_vintage_map[v] for v in ces_nsa_vintage_idx_raw], dtype=int
+    )
 
     # Provider data
     pp_data: list[dict] = []
@@ -302,19 +324,6 @@ def panel_to_model_data(
     for t in range(BD_QCEW_LAG, T):
         if np.isfinite(bd_proxy[t - BD_QCEW_LAG]):
             bd_qcew_lagged[t] = bd_proxy[t - BD_QCEW_LAG]
-    birth_rate_mean = (
-        float(np.nanmean(birth_rate)) if np.any(np.isfinite(birth_rate)) else 0.0
-    )
-    bd_qcew_mean = (
-        float(np.nanmean(bd_qcew_lagged))
-        if np.any(np.isfinite(bd_qcew_lagged))
-        else 0.0
-    )
-    birth_rate_c = np.where(np.isfinite(birth_rate), birth_rate - birth_rate_mean, 0.0)
-    bd_qcew_c = np.where(
-        np.isfinite(bd_qcew_lagged), bd_qcew_lagged - bd_qcew_mean, 0.0
-    )
-
     cyclical = _load_cyclical_indicators(dates, T)
 
     if as_of is not None:
@@ -344,9 +353,21 @@ def panel_to_model_data(
     n_birth = int(np.sum(np.isfinite(birth_rate)))
     n_bd_qcew = int(np.sum(np.isfinite(bd_qcew_lagged)))
 
+    _vintage_names = {0: "1st", 1: "2nd", 2: "Final"}
+    _inv_vintage_map = {i: v for v, i in ces_vintage_map.items()}
+
+    def _vintage_dist(vidx_raw: np.ndarray) -> str:
+        counts: dict[int, int] = {}
+        for v in vidx_raw:
+            counts[int(v)] = counts.get(int(v), 0) + 1
+        parts = [
+            f"{counts[k]} {_vintage_names[k]}" for k in sorted(counts) if counts[k] > 0
+        ]
+        return ", ".join(parts) if parts else "none"
+
     print(f"Growth-rate model (v3): T = {T} months ({dates[0]} → {dates[-1]})")
-    print(f"  CES SA:  {len(ces_sa_obs)} monthly obs")
-    print(f"  CES NSA: {len(ces_nsa_obs)} monthly obs")
+    print(f"  CES SA:  {len(ces_sa_obs)} monthly obs ({_vintage_dist(ces_sa_vintage_idx_raw)})")
+    print(f"  CES NSA: {len(ces_nsa_obs)} monthly obs ({_vintage_dist(ces_nsa_vintage_idx_raw)})")
     rev_mult_str = ""
     if len(qcew_obs) > 0:
         rev_mult_str = f"; rev mult min={qcew_noise_mult.min():.1f}, max={qcew_noise_mult.max():.1f}"
@@ -361,11 +382,13 @@ def panel_to_model_data(
         if pp["births"] is not None:
             bstr = f", births: {len(pp['births_obs'])} obs"
         print(f"  {pp['name']:5}: {n_obs} obs (error: {em}){bstr}")
+    _br_mean = float(np.nanmean(birth_rate)) if np.any(np.isfinite(birth_rate)) else 0.0
+    _bq_mean = float(np.nanmean(bd_qcew_lagged)) if np.any(np.isfinite(bd_qcew_lagged)) else 0.0
     print(
         f"  BD covariates: birth_rate {n_birth} obs "
-        f"(mean={birth_rate_mean * 100:.3f}%), "
+        f"(mean={_br_mean * 100:.3f}%), "
         f"bd_qcew_lagged {n_bd_qcew} obs "
-        f"(L={BD_QCEW_LAG}mo, mean={bd_qcew_mean * 100:.4f}%)"
+        f"(L={BD_QCEW_LAG}mo, mean={_bq_mean * 100:.4f}%)"
     )
     for spec in CYCLICAL_INDICATORS:
         key = f"{spec['name']}_c"
@@ -393,8 +416,12 @@ def panel_to_model_data(
         era_idx=era_idx,
         g_ces_sa=g_ces_sa,
         ces_sa_obs=ces_sa_obs,
+        ces_sa_vintage_idx=ces_sa_vintage_idx,
         g_ces_nsa=g_ces_nsa,
         ces_nsa_obs=ces_nsa_obs,
+        ces_nsa_vintage_idx=ces_nsa_vintage_idx,
+        n_ces_vintages=n_ces_vintages,
+        ces_vintage_map=ces_vintage_map,
         g_qcew=g_qcew,
         qcew_obs=qcew_obs,
         qcew_is_m2=qcew_is_m2,
@@ -402,15 +429,8 @@ def panel_to_model_data(
         pp_data=pp_data,
         n_providers=len(providers),
         birth_rate=birth_rate,
-        birth_rate_mean=birth_rate_mean,
-        birth_rate_c=birth_rate_c,
         bd_proxy=bd_proxy,
         bd_qcew_lagged=bd_qcew_lagged,
-        bd_qcew_mean=bd_qcew_mean,
-        bd_qcew_c=bd_qcew_c,
-        g_ces_sa_by_vintage=g_ces_sa_by_vintage,
-        g_ces_nsa_by_vintage=g_ces_nsa_by_vintage,
-        has_ces_vintage=has_ces_vintage,
         **cyclical,
     )
 
@@ -419,23 +439,17 @@ def build_obs_sources(data: dict) -> dict:
     """Build ``{var_name: (label, observed_array)}`` used by predictive checks."""
     sources: dict[str, tuple[str, np.ndarray]] = {}
 
-    vintage_labels = ['1st print', '2nd print', 'Final']
-    for v in range(3):
-        g_sa_v = data['g_ces_sa_by_vintage'][v]
-        obs_v = np.where(np.isfinite(g_sa_v))[0]
-        if len(obs_v) > 0:
-            sources[f'obs_ces_sa_v{v + 1}'] = (
-                f'CES SA ({vintage_labels[v]})', g_sa_v[obs_v]
-            )
-        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
-        obs_v_nsa = np.where(np.isfinite(g_nsa_v))[0]
-        if len(obs_v_nsa) > 0:
-            sources[f'obs_ces_nsa_v{v + 1}'] = (
-                f'CES NSA ({vintage_labels[v]})', g_nsa_v[obs_v_nsa]
-            )
+    ces_sa_obs = data["ces_sa_obs"]
+    ces_nsa_obs = data["ces_nsa_obs"]
+    if len(ces_sa_obs) > 0:
+        sources["obs_ces_sa"] = ("CES SA", data["g_ces_sa"][ces_sa_obs])
+    if len(ces_nsa_obs) > 0:
+        sources["obs_ces_nsa"] = ("CES NSA", data["g_ces_nsa"][ces_nsa_obs])
 
     sources["obs_qcew"] = ("QCEW", data["g_qcew"][data["qcew_obs"]])
     for pp in data["pp_data"]:
+        if len(pp["pp_obs"]) == 0:
+            continue
         name = pp["config"].name.lower()
         sources[f"obs_{name}"] = (pp["name"], pp["g_pp"][pp["pp_obs"]])
     return sources

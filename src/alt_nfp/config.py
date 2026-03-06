@@ -52,11 +52,40 @@ QCEW_NU: int = 5
 LOG_SIGMA_QCEW_BOUNDARY_MU = math.log(0.002)  # M3+M1 months — 90% prior ≈ [0.0009, 0.0046]
 LOG_SIGMA_QCEW_BOUNDARY_SD = 0.5
 
+# CES observation noise: LogNormal priors (same rationale as QCEW —
+# prevents zero-boundary funnel and keeps CES precision bounded).
+LOG_SIGMA_CES_MU = math.log(0.002)  # mode ~0.0016, median 0.002
+LOG_SIGMA_CES_SD = 0.5  # 90% prior ≈ [0.0009, 0.0044]
+
 # Fourier seasonal innovation: LogNormal priors (same rationale as QCEW sigmas —
 # HalfNormal allows sigma_fourier to collapse to zero, creating a boundary pathology).
 # mu is for k=1; higher harmonics subtract log(k) in model.py.
 LOG_SIGMA_FOURIER_MU = math.log(0.0003)  # k=1 mode ~0.00022
 LOG_SIGMA_FOURIER_SD = 0.5  # ~90% prior [0.00011, 0.00082] for k=1
+
+# Latent AR(1) marginal SD (tau).  Reparameterising in terms of the
+# stationary SD tau rather than the innovation SD sigma_g breaks the
+# phi-sigma ridge that causes poor ESS when phi is near 1.
+# sigma_g = tau * sqrt(1 - phi^2) is derived in the model.
+# Calibration: posterior sigma_g ~ 0.008, phi ~ 0.8 → tau ~ 0.013.
+LOG_TAU_MU = math.log(0.013)  # median ≈ 0.013
+LOG_TAU_SD = 0.5  # 90% prior ≈ [0.006, 0.029]
+
+# BD innovation sigma: LogNormal avoids the zero-boundary funnel that
+# HalfNormal creates for this small-scale parameter.
+LOG_SIGMA_BD_MU = math.log(0.003)  # median ≈ 0.003
+LOG_SIGMA_BD_SD = 0.5  # 90% prior ≈ [0.0013, 0.0067]
+
+# Post-COVID era multiplier for QCEW boundary-month (M1+M3) noise.
+# Empirical calibration: revision RMSE ratio (2022+ / 2017-2019) pooled
+# across Q1-Q4 for boundary months only (M2 is era-invariant, ratio ~1.0).
+# Applied multiplicatively on top of the per-observation revision multiplier.
+QCEW_POST_COVID_BOUNDARY_ERA_MULT: dict[int, float] = {
+    0: 5.0,
+    1: 3.5,
+    2: 2.0,
+}
+QCEW_POST_COVID_BOUNDARY_ERA_DEFAULT: float = 1.0
 
 # QCEW publication lag in months (for BD proxy computation)
 BD_QCEW_LAG = 6
@@ -66,11 +95,10 @@ N_HARMONICS = 4
 
 # Era-specific latent state parameters.  Breakpoints partition the sample
 # into macro-structurally distinct regimes so mu_g and phi can vary.
-N_ERAS = 3
-ERA_BREAKS: list[date] = [date(2009, 1, 1), date(2020, 1, 1)]
-# Era 0: Pre-GFC    (2003-01 → 2008-12)
-# Era 1: Post-GFC   (2009-01 → 2019-12)
-# Era 2: Post-COVID  (2020-01 → present)
+N_ERAS = 2
+ERA_BREAKS: list[date] = [date(2020, 1, 1)]
+# Era 0: Pre-COVID  (2012-01 → 2019-12)
+# Era 1: Post-COVID (2020-01 → present)
 
 # Cyclical indicators for structural BD model (demand-side covariates).
 # Each indicator is downloaded from FRED into data/indicators/<name>.parquet

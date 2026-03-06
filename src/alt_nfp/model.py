@@ -5,12 +5,12 @@ Builds a hierarchical Bayesian model with the following components:
 1. **Latent continuing-units growth** — AR(1) process with mean reversion.
 2. **Fourier seasonal** — annually-evolving harmonic amplitudes via
    Gaussian random walk.
-3. **Structural birth/death** — time-varying offset driven by birth-rate
-   and optional cyclical demand indicators (claims, JOLTS).
+3. **Structural birth/death** — time-varying offset driven by optional
+   cyclical demand indicators (claims, JOLTS).
 4. **QCEW likelihood** — near-census truth anchor with estimated base noise
    by tier (M2 vs M3+M1) and per-observation revision multipliers.
-5. **CES likelihood** — vintage-specific noise (1st print, 2nd print,
-   final) with shared bias/loading parameters.
+5. **CES likelihood** — one best-available print per month with
+   vintage-indexed noise (σ_ces[vintage_idx]) and shared bias/loading.
 6. **Provider likelihoods** — config-driven loop supporting both iid and
    AR(1) measurement-error structures.
 """
@@ -24,12 +24,18 @@ import pytensor.tensor as pt
 
 from .config import (
     CYCLICAL_INDICATORS,
+    LOG_SIGMA_BD_MU,
+    LOG_SIGMA_BD_SD,
+    LOG_SIGMA_CES_MU,
+    LOG_SIGMA_CES_SD,
     LOG_SIGMA_FOURIER_MU,
     LOG_SIGMA_FOURIER_SD,
     LOG_SIGMA_QCEW_BOUNDARY_MU,
     LOG_SIGMA_QCEW_BOUNDARY_SD,
     LOG_SIGMA_QCEW_MID_MU,
     LOG_SIGMA_QCEW_MID_SD,
+    LOG_TAU_MU,
+    LOG_TAU_SD,
     N_ERAS,
     N_HARMONICS,
     QCEW_NU,
@@ -49,7 +55,7 @@ def build_model(data: dict) -> pm.Model:
     * Provider likelihoods are generated in a loop driven by
       ``data['pp_data']`` / ``ProviderConfig``.
     * Birth/death is time-varying:
-      ``bd_t = φ₀ + φ₁·birth_rate_c + φ₃·X^cycle + σ_bd·ξ_t``
+      ``bd_t = φ₀ + φ₃·X^cycle + σ_bd·ξ_t``
     * QCEW observation noise: two estimated base sigmas (M2 vs M3+M1)
       times per-observation revision multiplier from ``data['qcew_noise_mult']``.
     """
@@ -81,7 +87,7 @@ def build_model(data: dict) -> pm.Model:
             qcew_is_m2, sigma_qcew_mid, sigma_qcew_boundary
         )
         qcew_sigma = base_sigma * pt.as_tensor_variable(
-            data["qcew_noise_mult"], dtype=pt.dscalar
+            data["qcew_noise_mult"], dtype="float64"
         )
 
         # =============================================================
@@ -90,31 +96,33 @@ def build_model(data: dict) -> pm.Model:
 
         era_idx = data.get("era_idx")
 
-        sigma_g = pm.HalfNormal("sigma_g", sigma=0.005)
+        # Marginal SD of the AR(1) process.  Reparameterising as tau
+        # (stationary SD) rather than the innovation SD sigma_g breaks
+        # the phi-sigma ridge that causes low ESS.
+        tau = pm.LogNormal("tau", mu=LOG_TAU_MU, sigma=LOG_TAU_SD)
+        phi_raw = pm.Beta("phi_raw", alpha=18, beta=2)
+        phi = pt.minimum(phi_raw, 0.99)
+        sigma_g = tau * pt.sqrt(1 - phi**2)
         eps_g = pm.Normal("eps_g", 0, 1, shape=T)
 
         if era_idx is not None:
             mu_g_era = pm.Normal("mu_g_era", mu=0.001, sigma=0.005, shape=N_ERAS)
-            phi_raw_era = pm.Beta("phi_raw_era", alpha=18, beta=2, shape=N_ERAS)
-
             mu_g = mu_g_era[era_idx]       # (T,)
-            phi = phi_raw_era[era_idx]     # (T,)
 
             g0 = mu_g[0] + sigma_g * eps_g[0]
 
-            def ar1_step_era(e_t, mu_t, phi_t, g_prev, _sig):
-                return mu_t + phi_t * (g_prev - mu_t) + _sig * e_t
+            def ar1_step_era(e_t, mu_t, g_prev, _phi, _sig):
+                return mu_t + _phi * (g_prev - mu_t) + _sig * e_t
 
             g_rest, _ = pytensor.scan(
                 fn=ar1_step_era,
-                sequences=[eps_g[1:], mu_g[1:], phi[1:]],
+                sequences=[eps_g[1:], mu_g[1:]],
                 outputs_info=[g0],
-                non_sequences=[sigma_g],
+                non_sequences=[phi, sigma_g],
                 strict=True,
             )
         else:
             mu_g = pm.Normal("mu_g", mu=0.001, sigma=0.005)
-            phi = pm.Uniform("phi", lower=0.0, upper=0.99)
 
             g0 = mu_g + sigma_g * eps_g[0]
 
@@ -182,7 +190,7 @@ def build_model(data: dict) -> pm.Model:
         # =============================================================
         # Structural birth/death offset
         #
-        #   bd_t = φ_0 + φ_1·birth_rate_c + φ_3·X^cycle + σ_bd·ξ_t
+        #   bd_t = φ_0 + φ_3·X^cycle + σ_bd·ξ_t
         #
         # Covariates are centred so φ_0 ≈ mean BD at average covariate
         # values.  Where a covariate is unavailable (early sample or
@@ -191,16 +199,11 @@ def build_model(data: dict) -> pm.Model:
         # =============================================================
 
         phi_0 = pm.Normal("phi_0", mu=0.001, sigma=0.002)
-        sigma_bd = pm.HalfNormal("sigma_bd", sigma=0.001)
+        sigma_bd = pm.LogNormal("sigma_bd", mu=LOG_SIGMA_BD_MU, sigma=LOG_SIGMA_BD_SD)
 
         xi_bd = pm.Normal("xi_bd", 0, 1, shape=T)
 
         bd_t = phi_0 + sigma_bd * xi_bd
-
-        has_birth = np.any(data["birth_rate_c"] != 0.0)
-        if has_birth:
-            phi_1 = pm.Normal("phi_1", mu=0.5, sigma=0.5)
-            bd_t = bd_t + phi_1 * pt.as_tensor_variable(data["birth_rate_c"])
 
         # Cyclical indicators (demand-side BD covariates)
         cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]
@@ -244,41 +247,46 @@ def build_model(data: dict) -> pm.Model:
         )
 
         # =============================================================
-        # CES likelihood — vintage-specific noise
+        # CES likelihood — best-available print with vintage-indexed σ
         #
-        # Shared α_CES and λ_CES across vintages.  Separate σ per
-        # vintage v ∈ {1, 2, 3} (first print, second print, final).
+        # One observation per month per SA/NSA.  σ selected per-obs
+        # via ces_{sa,nsa}_vintage_idx (0=1st, 1=2nd, 2=final).
         # =============================================================
 
         alpha_ces = pm.Normal("alpha_ces", 0, 0.005)
-        lambda_ces = pm.Normal("lambda_ces", 1.0, 0.15)
-        sigma_ces_sa = pm.InverseGamma(
-            "sigma_ces_sa", alpha=3.0, beta=0.004, shape=3
+        lambda_ces = pm.TruncatedNormal(
+            "lambda_ces", mu=1.0, sigma=0.1, lower=0.5
         )
-        sigma_ces_nsa = pm.InverseGamma(
-            "sigma_ces_nsa", alpha=3.0, beta=0.004, shape=3
+        n_ces_v = data["n_ces_vintages"]
+        sigma_ces_sa = pm.LogNormal(
+            "sigma_ces_sa", mu=LOG_SIGMA_CES_MU, sigma=LOG_SIGMA_CES_SD,
+            shape=n_ces_v,
+        )
+        sigma_ces_nsa = pm.LogNormal(
+            "sigma_ces_nsa", mu=LOG_SIGMA_CES_MU, sigma=LOG_SIGMA_CES_SD,
+            shape=n_ces_v,
         )
 
-        for v in range(3):
-            g_sa_v = data['g_ces_sa_by_vintage'][v]
-            obs_v = np.where(np.isfinite(g_sa_v))[0]
-            if len(obs_v) > 0:
-                pm.Normal(
-                    f'obs_ces_sa_v{v + 1}',
-                    mu=alpha_ces + lambda_ces * g_total_sa[obs_v],
-                    sigma=sigma_ces_sa[v],
-                    observed=g_sa_v[obs_v],
-                )
+        ces_sa_obs = data["ces_sa_obs"]
+        ces_nsa_obs = data["ces_nsa_obs"]
+        ces_sa_vidx = data["ces_sa_vintage_idx"]
+        ces_nsa_vidx = data["ces_nsa_vintage_idx"]
 
-            g_nsa_v = data['g_ces_nsa_by_vintage'][v]
-            obs_v_nsa = np.where(np.isfinite(g_nsa_v))[0]
-            if len(obs_v_nsa) > 0:
-                pm.Normal(
-                    f'obs_ces_nsa_v{v + 1}',
-                    mu=alpha_ces + lambda_ces * g_total_nsa[obs_v_nsa],
-                    sigma=sigma_ces_nsa[v],
-                    observed=g_nsa_v[obs_v_nsa],
-                )
+        if len(ces_sa_obs) > 0:
+            pm.Normal(
+                "obs_ces_sa",
+                mu=alpha_ces + lambda_ces * g_total_sa[ces_sa_obs],
+                sigma=sigma_ces_sa[ces_sa_vidx],
+                observed=data["g_ces_sa"][ces_sa_obs],
+            )
+
+        if len(ces_nsa_obs) > 0:
+            pm.Normal(
+                "obs_ces_nsa",
+                mu=alpha_ces + lambda_ces * g_total_nsa[ces_nsa_obs],
+                sigma=sigma_ces_nsa[ces_nsa_vidx],
+                observed=data["g_ces_nsa"][ces_nsa_obs],
+            )
 
         # =============================================================
         # PP likelihoods — config-driven, per-provider

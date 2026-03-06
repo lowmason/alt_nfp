@@ -30,13 +30,12 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
 
     # --- Posterior parameter samples ---
     if "mu_g_era" in idata.posterior:
-        # Era-specific: use last era (Post-COVID) for all forecast steps
         mu_g_post = idata.posterior["mu_g_era"].values[:, :, -1]
-        phi_post = idata.posterior["phi_raw_era"].values[:, :, -1]
     else:
         mu_g_post = idata.posterior["mu_g"].values
-        phi_post = idata.posterior["phi"].values
-    sigma_g_post = idata.posterior["sigma_g"].values
+    phi_post = idata.posterior["phi_raw"].values
+    tau_post = idata.posterior["tau"].values
+    sigma_g_post = tau_post * np.sqrt(1 - phi_post**2)
     fourier_post = idata.posterior["fourier_coefs_det"].values  # (chains, draws, n_years, 2K)
     g_cont_post = idata.posterior["g_cont"].values
     g_sa_post = idata.posterior["g_total_sa"].values
@@ -44,7 +43,6 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
 
     # Structural BD parameters
     phi_0_post = idata.posterior["phi_0"].values
-    phi_1_post = idata.posterior["phi_1"].values if "phi_1" in idata.posterior else 0.0
     sigma_bd_post = idata.posterior["sigma_bd"].values
 
     n_chains, n_draws, T_hist = g_cont_post.shape
@@ -65,14 +63,6 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
     n_fwd = len(forecast_dates)
     forecast_month_idx = [d.month - 1 for d in forecast_dates]
 
-    # --- BD forward-propagation covariates ---
-    birth_rate = data["birth_rate"]
-    birth_rate_mean = data["birth_rate_mean"]
-
-    # Last observed birth rate (centred)
-    finite_br = np.where(np.isfinite(birth_rate))[0]
-    birth_rate_last_c = (birth_rate[finite_br[-1]] - birth_rate_mean) if len(finite_br) > 0 else 0.0
-
     # --- Simulate forward ---
     rng = np.random.default_rng(42)
     g_cont_fwd = np.zeros((n_chains, n_draws, n_fwd))
@@ -88,11 +78,7 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
 
         # Structural BD
         eps_bd = rng.standard_normal((n_chains, n_draws))
-        bd_fwd[:, :, h] = (
-            phi_0_post
-            + phi_1_post * birth_rate_last_c
-            + sigma_bd_post * eps_bd
-        )
+        bd_fwd[:, :, h] = phi_0_post + sigma_bd_post * eps_bd
 
         # Evaluate Fourier seasonal for this forecast month
         mi = forecast_month_idx[h]

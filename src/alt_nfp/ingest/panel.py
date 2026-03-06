@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def build_panel(
     store_path: Path | None = None,
     providers: list[ProviderConfig] | None = None,
-    start_year: int = 2003,
+    start_year: int = 2012,
     end_year: int | None = None,
     as_of_ref: date | None = None,
 ) -> pl.DataFrame:
@@ -39,7 +39,7 @@ def build_panel(
     providers : list[ProviderConfig], optional
         Provider list. Defaults to PROVIDERS from config.
     start_year : int
-        First year for data (default 2003).
+        First year for data (default 2012).
     end_year : int, optional
         Last year for data. Defaults to current year.
     as_of_ref : date, optional

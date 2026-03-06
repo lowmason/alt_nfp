@@ -91,7 +91,7 @@ def _get_anchor_level(data: dict, march_year: int) -> float:
             if val is not None and np.isfinite(val):
                 return float(val)
 
-    # Path 2: levels DataFrame
+    # Path 2: levels DataFrame (prefer actual employment level over index)
     levels = data.get("levels")
     if levels is not None:
         mask = levels.filter(
@@ -99,9 +99,10 @@ def _get_anchor_level(data: dict, march_year: int) -> float:
             & (pl.col("ref_date").dt.month() == target_month)
         )
         if not mask.is_empty():
-            val = mask["ces_nsa_index"][0]
-            if val is not None and np.isfinite(val):
-                return float(val)
+            if "ces_nsa_level" in mask.columns:
+                val = mask["ces_nsa_level"][0]
+                if val is not None and np.isfinite(val):
+                    return float(val)
 
     raise ValueError(
         f"Cannot find CES NSA employment level at March {target_year} "

@@ -6,9 +6,9 @@ falls back to PyMC's built-in NUTS sampler when *nutpie* is unavailable.
 
 Three preset configurations are exported for different use cases:
 
-* :data:`DEFAULT_SAMPLER_KWARGS` — full production run (8 000 draws).
+* :data:`DEFAULT_SAMPLER_KWARGS` — production run (4 000 draws).
 * :data:`MEDIUM_SAMPLER_KWARGS` — sensitivity sweeps (4 000 draws).
-* :data:`LIGHT_SAMPLER_KWARGS` — backtest loops (~30 s / run).
+* :data:`LIGHT_SAMPLER_KWARGS` — backtest loops / fast iteration (~30 s).
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ from __future__ import annotations
 import arviz as az
 import pymc as pm
 
-# Default sampling configuration (full production run)
+# Default sampling configuration (production run)
 DEFAULT_SAMPLER_KWARGS: dict = dict(
-    draws=8000,
-    tune=6000,
+    draws=4000,
+    tune=3000,
     chains=4,
-    target_accept=0.99,
+    target_accept=0.95,
     return_inferencedata=True,
 )
 

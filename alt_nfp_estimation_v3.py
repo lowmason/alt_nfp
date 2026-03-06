@@ -5,7 +5,8 @@
 Growth-rate Bayesian state-space model for U.S. total nonfarm employment.
 
 Usage:
-    python alt_nfp_estimation_v3.py
+    python alt_nfp_estimation_v3.py          # default (production)
+    python alt_nfp_estimation_v3.py --fast   # light sampler, skip LOO-CV
 '''
 
 
@@ -15,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -41,13 +43,20 @@ from alt_nfp.model import build_model
 from alt_nfp.panel_adapter import panel_to_model_data
 from alt_nfp.plots import plot_bd_diagnostics, plot_growth_and_seasonal, plot_reconstructed_index
 from alt_nfp.residuals import plot_residuals
-from alt_nfp.sampling import sample_model
+from alt_nfp.sampling import LIGHT_SAMPLER_KWARGS, sample_model
 
 # -------------------------------------------------------------------------------------------------
 # Main function
 # -------------------------------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="alt_nfp v3 estimation pipeline")
+    parser.add_argument(
+        "--fast", action="store_true",
+        help="Use light sampler (2k draws, 2 chains) and skip LOO-CV",
+    )
+    args = parser.parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # 1. Data -------------------------------------------------------------------------------------
@@ -61,7 +70,8 @@ def main() -> None:
     run_prior_predictive_checks(model, data)
 
     # 4. Sample -----------------------------------------------------------------------------------
-    idata = sample_model(model)
+    sampler_kwargs = LIGHT_SAMPLER_KWARGS if args.fast else None
+    idata = sample_model(model, sampler_kwargs=sampler_kwargs)
 
     # 5. Diagnostics ------------------------------------------------------------------------------
     print_diagnostics(idata, data)
@@ -79,8 +89,9 @@ def main() -> None:
     # 6. Posterior predictive checks --------------------------------------------------------------
     run_posterior_predictive_checks(model, idata, data)
 
-    # 7. LOO-CV -----------------------------------------------------------------------------------
-    run_loo_cv(model, idata, data)
+    # 7. LOO-CV (skip in --fast mode) -------------------------------------------------------------
+    if not args.fast:
+        run_loo_cv(model, idata, data)
 
     # 8. Plots ------------------------------------------------------------------------------------
     plot_growth_and_seasonal(idata, data)

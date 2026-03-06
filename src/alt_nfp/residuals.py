@@ -40,44 +40,56 @@ def plot_residuals(idata: az.InferenceData, data: dict) -> None:
 
     alpha_ces = idata.posterior["alpha_ces"].values.flatten().mean()
     lambda_ces = idata.posterior["lambda_ces"].values.flatten().mean()
-    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.mean(axis=(0, 1))   # (3,)
-    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.mean(axis=(0, 1))  # (3,)
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.mean(axis=(0, 1))   # (n_ces_v,)
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.mean(axis=(0, 1))  # (n_ces_v,)
 
-    # Count CES vintage panels (only vintages with data)
-    vintage_labels = ['1st print', '2nd print', 'Final']
-    vintage_colors = ['#ff7f0e', '#d62728', '#2ca02c']
-    ces_panels: list[tuple[str, str, np.ndarray, np.ndarray, float, str]] = []
-    for v in range(3):
-        g_sa_v = data['g_ces_sa_by_vintage'][v]
-        obs_sa = np.where(np.isfinite(g_sa_v))[0]
-        if len(obs_sa) > 0:
-            ces_panels.append((
-                f'CES SA ({vintage_labels[v]})', 'sa', g_sa_v,
-                obs_sa, sigma_ces_sa[v], vintage_colors[v],
-            ))
-        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
-        obs_nsa = np.where(np.isfinite(g_nsa_v))[0]
-        if len(obs_nsa) > 0:
-            ces_panels.append((
-                f'CES NSA ({vintage_labels[v]})', 'nsa', g_nsa_v,
-                obs_nsa, sigma_ces_nsa[v], vintage_colors[v],
-            ))
+    _orig_vintage_colors = {0: '#ff7f0e', 1: '#d62728', 2: '#2ca02c'}
+    _orig_vintage_labels = {0: '1st', 1: '2nd', 2: 'Final'}
+    vintage_map = data.get("ces_vintage_map", {0: 0, 1: 1, 2: 2})
+    inv_map = {i: v for v, i in vintage_map.items()}
+    vintage_colors = {i: _orig_vintage_colors[inv_map[i]] for i in inv_map}
+    vintage_labels = {i: _orig_vintage_labels[inv_map[i]] for i in inv_map}
 
-    n_panels = len(ces_panels) + len(pp_data) + 1  # CES vintages + PPs + QCEW
+    n_panels = 2 + len(pp_data) + 1  # CES SA + CES NSA + PPs + QCEW
     fig, axes = plt.subplots(n_panels, 1, figsize=(14, 3.2 * n_panels), sharex=True)
 
-    # --- CES vintage panels ---
-    for panel_i, (title, sa_or_nsa, g_v, obs_v, sig_v, clr) in enumerate(ces_panels):
-        ax = axes[panel_i]
-        if sa_or_nsa == 'sa':
-            pred = alpha_ces + lambda_ces * g_total_sa[obs_v]
-        else:
-            pred = alpha_ces + lambda_ces * g_total_nsa[obs_v]
-        resid = (g_v[obs_v] - pred) / sig_v
-        ax.scatter(dates_arr[obs_v], resid, s=8, c=clr, alpha=0.6)
-        _resid_lines(ax, title)
+    # --- CES SA ---
+    ax = axes[0]
+    ces_sa_obs = data["ces_sa_obs"]
+    ces_sa_vidx = data["ces_sa_vintage_idx"]
+    if len(ces_sa_obs) > 0:
+        pred = alpha_ces + lambda_ces * g_total_sa[ces_sa_obs]
+        sig = sigma_ces_sa[ces_sa_vidx]
+        resid = (data["g_ces_sa"][ces_sa_obs] - pred) / sig
+        for v in sorted(vintage_colors):
+            mask = ces_sa_vidx == v
+            if mask.any():
+                ax.scatter(
+                    dates_arr[ces_sa_obs[mask]], resid[mask], s=8,
+                    c=vintage_colors[v], alpha=0.6, label=vintage_labels[v],
+                )
+        ax.legend(fontsize=7)
+    _resid_lines(ax, "CES SA (best-available)")
 
-    n_ces_panels = len(ces_panels)
+    # --- CES NSA ---
+    ax = axes[1]
+    ces_nsa_obs = data["ces_nsa_obs"]
+    ces_nsa_vidx = data["ces_nsa_vintage_idx"]
+    if len(ces_nsa_obs) > 0:
+        pred = alpha_ces + lambda_ces * g_total_nsa[ces_nsa_obs]
+        sig = sigma_ces_nsa[ces_nsa_vidx]
+        resid = (data["g_ces_nsa"][ces_nsa_obs] - pred) / sig
+        for v in sorted(vintage_colors):
+            mask = ces_nsa_vidx == v
+            if mask.any():
+                ax.scatter(
+                    dates_arr[ces_nsa_obs[mask]], resid[mask], s=8,
+                    c=vintage_colors[v], alpha=0.6, label=vintage_labels[v],
+                )
+        ax.legend(fontsize=7)
+    _resid_lines(ax, "CES NSA (best-available)")
+
+    n_ces_panels = 2
 
     # --- Per-provider PP ---
     for p_idx, pp in enumerate(pp_data):

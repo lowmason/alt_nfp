@@ -26,23 +26,22 @@ class TestEraSpecificModel:
         model = build_model(model_data)
         var_names = {v.name for v in model.free_RVs}
         assert "mu_g_era" in var_names
-        assert "phi_raw_era" in var_names
+        assert "phi_raw" in var_names
         assert "mu_g" not in var_names
-        assert "phi" not in var_names
 
     def test_era_param_shapes(self, model_data):
         model = build_model(model_data)
         for rv in model.free_RVs:
             if rv.name == "mu_g_era":
                 assert rv.eval().shape == (N_ERAS,)
-            if rv.name == "phi_raw_era":
-                assert rv.eval().shape == (N_ERAS,)
+            if rv.name == "phi_raw":
+                assert rv.eval().shape == ()
 
     def test_era_idx_in_data(self, model_data):
         assert "era_idx" in model_data
         era_idx = model_data["era_idx"]
         assert era_idx.shape == (model_data["T"],)
-        assert set(np.unique(era_idx)).issubset({0, 1, 2})
+        assert set(np.unique(era_idx)).issubset(set(range(N_ERAS)))
 
 
 class TestScalarFallback:
@@ -53,6 +52,5 @@ class TestScalarFallback:
         model = build_model(data_no_era)
         var_names = {v.name for v in model.free_RVs}
         assert "mu_g" in var_names
-        assert "phi" in var_names
+        assert "phi_raw" in var_names
         assert "mu_g_era" not in var_names
-        assert "phi_raw_era" not in var_names

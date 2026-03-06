@@ -105,8 +105,8 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
         result = composite_df.select(["ref_date", "employment"])
     else:
         filter_cols = {
-            "geography_type": config.geography_type,
-            "geography_code": config.geography_code,
+            "geographic_type": config.geography_type,
+            "geographic_code": config.geography_code,
             "industry_type": config.industry_type,
             "industry_code": config.industry_code,
         }
@@ -183,8 +183,8 @@ def ingest_provider(
         raw = composite_df.sort("ref_date")
     else:
         filter_cols = {
-            "geography_type": config.geography_type,
-            "geography_code": config.geography_code,
+            "geographic_type": config.geography_type,
+            "geographic_code": config.geography_code,
             "industry_type": config.industry_type,
             "industry_code": config.industry_code,
         }

@@ -83,9 +83,11 @@ def _make_mock_data(
     levels = pl.DataFrame(
         {
             "ref_date": dates,
-            "ces_nsa_index": [anchor_level] * T,
-            "ces_sa_index": [anchor_level] * T,
-            "qcew_nsa_index": [anchor_level] * T,
+            "ces_nsa_index": [100.0] * T,
+            "ces_sa_index": [100.0] * T,
+            "ces_nsa_level": [anchor_level] * T,
+            "ces_sa_level": [anchor_level] * T,
+            "qcew_nsa_index": [100.0] * T,
         }
     )
 

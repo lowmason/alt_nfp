@@ -136,8 +136,8 @@ class TestDownloadIndicators:
 
         results = download_indicators(store_dir=tmp_path, api_key="fake")
 
-        assert len(results) == 4
-        for spec_name in ("claims", "nfci", "biz_apps", "jolts"):
+        assert len(results) == 2
+        for spec_name in ("claims", "jolts"):
             assert results[spec_name] == 2
             assert (tmp_path / f"{spec_name}.parquet").exists()
 

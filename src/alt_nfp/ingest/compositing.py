@@ -146,6 +146,9 @@ def load_qcew_weights(
                 break
         if best is None:
             best = sorted_qcew_dates[0]
+            logger.warning(
+                "No QCEW weights at or before %s; using %s (lookahead)", prd, best
+            )
 
         weights_by_date[prd] = shares_by_qcew_date[best]
         staleness_rows.append({

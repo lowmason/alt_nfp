@@ -43,15 +43,14 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
     # Build var_names dynamically — era-specific or scalar latent params
     has_era = "mu_g_era" in idata.posterior
     if has_era:
-        latent_vars = ["mu_g_era", "phi_raw_era", "sigma_g"]
+        latent_vars = ["mu_g_era", "phi_raw", "tau"]
     else:
-        latent_vars = ["mu_g", "phi", "sigma_g"]
+        latent_vars = ["mu_g", "phi_raw", "tau"]
 
     var_names = [
         *latent_vars,
         "sigma_fourier",
         "phi_0", "sigma_bd",
-        *(["phi_1"] if "phi_1" in idata.posterior else []),
         "alpha_ces", "lambda_ces", "sigma_ces_sa", "sigma_ces_nsa",
         *(
             ["sigma_qcew_mid", "sigma_qcew_boundary"]
@@ -93,7 +92,7 @@ def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
     print("=" * 72)
 
     _print_bd_summary(idata)
-    _print_ces_summary(idata)
+    _print_ces_summary(idata, data)
     _print_pp_summary(idata, pp_data)
 
 
@@ -109,12 +108,6 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
         f"[{np.percentile(phi_0, 10) * 100:+.4f}%, "
         f"{np.percentile(phi_0, 90) * 100:+.4f}%]"
     )
-    if "phi_1" in idata.posterior:
-        phi_1 = idata.posterior["phi_1"].values.flatten()
-        print(
-            f"  \u03c6_1 (birth rate):   {phi_1.mean():.3f}  "
-            f"[{np.percentile(phi_1, 10):.3f}, {np.percentile(phi_1, 90):.3f}]"
-        )
     print(f"  \u03c3_bd (innovation):  {sigma_bd.mean() * 100:.4f}%")
 
     if "phi_3" in idata.posterior:
@@ -138,12 +131,12 @@ def _print_bd_summary(idata: az.InferenceData) -> None:
     print(f"  bd_t range:         [{bd_mean.min() * 100:+.4f}%, {bd_mean.max() * 100:+.4f}%]")
 
 
-def _print_ces_summary(idata: az.InferenceData) -> None:
+def _print_ces_summary(idata: az.InferenceData, data: dict | None = None) -> None:
     """Print posterior summary of CES observation parameters."""
     a = idata.posterior["alpha_ces"].values.flatten()
     l = idata.posterior["lambda_ces"].values.flatten()
-    s_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, 3)
-    s_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, 3)
+    s_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, n_ces_v)
+    s_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, n_ces_v)
 
     print("\nCES observation parameters (vs QCEW anchor):")
     print(f"  \u03b1_ces  = {a.mean() * 100:+.4f}%/mo  (bias relative to true growth)")
@@ -151,14 +144,21 @@ def _print_ces_summary(idata: az.InferenceData) -> None:
         f"  \u03bb_ces  = {l.mean():.4f}  "
         f"[{np.percentile(l, 10):.4f}, {np.percentile(l, 90):.4f}]"
     )
-    vintage_labels = ['1st', '2nd', 'Final']
-    for v in range(3):
-        sa_v = s_sa[:, :, v].flatten()
-        nsa_v = s_nsa[:, :, v].flatten()
+    _all_vintage_names = {0: "1st", 1: "2nd", 2: "Final"}
+    vintage_map = data.get("ces_vintage_map") if data else None
+    if vintage_map is None:
+        vintage_map = {i: i for i in range(s_sa.shape[2])}
+    inv_map = {i: v for v, i in vintage_map.items()}
+    for i in range(s_sa.shape[2]):
+        orig_v = inv_map.get(i, i)
+        label = _all_vintage_names.get(orig_v, f"v{orig_v}")
+        sa_v = s_sa[:, :, i].flatten()
+        nsa_v = s_nsa[:, :, i].flatten()
         print(
-            f"  \u03c3_ces_sa[{vintage_labels[v]}] = {sa_v.mean() * 100:.3f}%  "
-            f"\u03c3_ces_nsa[{vintage_labels[v]}] = {nsa_v.mean() * 100:.3f}%"
+            f"  \u03c3_ces_sa[{label}] = {sa_v.mean() * 100:.3f}%  "
+            f"\u03c3_ces_nsa[{label}] = {nsa_v.mean() * 100:.3f}%"
         )
+    print("  (best-available print per month; σ selected by vintage index)")
 
 
 def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
@@ -220,13 +220,37 @@ def _qcew_precision_by_tier(
     return total_prec_qcew, prec_m2, prec_boundary, n_m2, n_boundary
 
 
+def _ces_precision_rows(
+    idata: az.InferenceData, data: dict
+) -> tuple[list[tuple[str, int, float, float]], float]:
+    """CES precision by SA/NSA using per-obs vintage-indexed sigma."""
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.mean(axis=(0, 1))  # (n_ces_v,)
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.mean(axis=(0, 1))
+    lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
+
+    rows: list[tuple[str, int, float, float]] = []
+    total = 0.0
+    for label, obs_key, vidx_key, sigma_arr in [
+        ("CES SA", "ces_sa_obs", "ces_sa_vintage_idx", sigma_ces_sa),
+        ("CES NSA", "ces_nsa_obs", "ces_nsa_vintage_idx", sigma_ces_nsa),
+    ]:
+        obs = data[obs_key]
+        vidx = data[vidx_key]
+        n = len(obs)
+        if n == 0:
+            continue
+        sigma_per_obs = sigma_arr[vidx]
+        prec_per_obs = lambda_ces**2 / sigma_per_obs**2
+        total_prec = float(np.sum(prec_per_obs))
+        avg_prec = total_prec / n
+        rows.append((label, n, avg_prec, total_prec))
+        total += total_prec
+    return rows, total
+
+
 def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
     """Quantify each source's precision-weighted information contribution."""
     pp_data = data["pp_data"]
-
-    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, 3)
-    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, 3)
-    lambda_ces = idata.posterior["lambda_ces"].values.flatten().mean()
 
     (
         total_prec_qcew,
@@ -240,29 +264,7 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
         prec_qcew_boundary / n_qcew_boundary if n_qcew_boundary > 0 else 0.0
     )
 
-    # CES vintage-specific precision
-    vintage_labels = ['1st', '2nd', 'Final']
-    ces_rows: list[tuple[str, int, float, float]] = []
-    total_prec_ces = 0.0
-    for v in range(3):
-        g_sa_v = data['g_ces_sa_by_vintage'][v]
-        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
-        n_sa = int(np.sum(np.isfinite(g_sa_v)))
-        n_nsa = int(np.sum(np.isfinite(g_nsa_v)))
-
-        sig_sa_v = sigma_ces_sa[:, :, v].flatten().mean()
-        sig_nsa_v = sigma_ces_nsa[:, :, v].flatten().mean()
-
-        if n_sa > 0:
-            prec_sa = lambda_ces**2 / sig_sa_v**2
-            total_sa = prec_sa * n_sa
-            ces_rows.append((f"CES SA ({vintage_labels[v]})", n_sa, prec_sa, total_sa))
-            total_prec_ces += total_sa
-        if n_nsa > 0:
-            prec_nsa = lambda_ces**2 / sig_nsa_v**2
-            total_nsa = prec_nsa * n_nsa
-            ces_rows.append((f"CES NSA ({vintage_labels[v]})", n_nsa, prec_nsa, total_nsa))
-            total_prec_ces += total_nsa
+    ces_rows, total_prec_ces = _ces_precision_rows(idata, data)
 
     pp_rows: list[tuple[str, int, float, float]] = []
     total_prec_pp = 0.0
@@ -312,9 +314,6 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
         lambda_mean, alpha_mean
     """
     pp_data = data["pp_data"]
-
-    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values
-    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values
     lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
     alpha_ces = float(idata.posterior["alpha_ces"].values.flatten().mean())
 
@@ -332,37 +331,16 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
 
     rows: list[dict] = []
 
-    # CES vintage-specific precision
-    vintage_labels = ["1st", "2nd", "Final"]
-    for v in range(3):
-        g_sa_v = data["g_ces_sa_by_vintage"][v]
-        g_nsa_v = data["g_ces_nsa_by_vintage"][v]
-        n_sa = int(np.sum(np.isfinite(g_sa_v)))
-        n_nsa = int(np.sum(np.isfinite(g_nsa_v)))
-
-        sig_sa_v = float(sigma_ces_sa[:, :, v].flatten().mean())
-        sig_nsa_v = float(sigma_ces_nsa[:, :, v].flatten().mean())
-
-        if n_sa > 0:
-            prec_sa = lambda_ces**2 / sig_sa_v**2
-            rows.append({
-                "source": f"CES SA ({vintage_labels[v]})",
-                "n_obs": n_sa,
-                "precision_per_obs": prec_sa,
-                "total_precision": prec_sa * n_sa,
-                "lambda_mean": lambda_ces,
-                "alpha_mean": alpha_ces,
-            })
-        if n_nsa > 0:
-            prec_nsa = lambda_ces**2 / sig_nsa_v**2
-            rows.append({
-                "source": f"CES NSA ({vintage_labels[v]})",
-                "n_obs": n_nsa,
-                "precision_per_obs": prec_nsa,
-                "total_precision": prec_nsa * n_nsa,
-                "lambda_mean": lambda_ces,
-                "alpha_mean": alpha_ces,
-            })
+    ces_prec_rows, _ = _ces_precision_rows(idata, data)
+    for label, n, avg_prec, total_prec in ces_prec_rows:
+        rows.append({
+            "source": label,
+            "n_obs": n,
+            "precision_per_obs": avg_prec,
+            "total_precision": total_prec,
+            "lambda_mean": lambda_ces,
+            "alpha_mean": alpha_ces,
+        })
 
     # Provider precision
     for pp in pp_data:
@@ -415,8 +393,7 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
 # =========================================================================
 
 _ERA_LABELS_DIAG = [
-    "Pre-GFC  (2003 → 2008-12)",
-    "Post-GFC (2009-01 → 2019-12)",
+    "Pre-COVID  (2012-01 → 2019-12)",
     "Post-COVID (2020-01 → present)",
 ]
 
@@ -430,10 +407,9 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
     pp_data = data["pp_data"]
     era_idx = data["era_idx"]  # (T,)
     dates = data["dates"]
-    T = len(dates)
 
-    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values
-    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values
+    sigma_ces_sa = idata.posterior["sigma_ces_sa"].values.mean(axis=(0, 1))  # (n_ces_v,)
+    sigma_ces_nsa = idata.posterior["sigma_ces_nsa"].values.mean(axis=(0, 1))
     lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
 
     sigma_mid = float(idata.posterior["sigma_qcew_mid"].values.flatten().mean())
@@ -444,7 +420,6 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
     qcew_is_m2 = np.asarray(data["qcew_is_m2"])
     qcew_noise_mult = np.asarray(data["qcew_noise_mult"], dtype=float)
 
-    vintage_labels = ["1st", "2nd", "Final"]
     n_eras = int(era_idx.max()) + 1 if len(era_idx) > 0 else 0
 
     for e in range(n_eras):
@@ -457,25 +432,25 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
         end_d = dates[era_t_idx[-1]]
         label = _ERA_LABELS_DIAG[e] if e < len(_ERA_LABELS_DIAG) else f"Era {e}"
 
-        # CES counts in this era
+        # CES precision in this era (per-obs vintage-indexed sigma)
         ces_rows: list[tuple[str, int, float, float]] = []
-        for v in range(3):
-            g_sa_v = data["g_ces_sa_by_vintage"][v]
-            g_nsa_v = data["g_ces_nsa_by_vintage"][v]
-            obs_sa = np.where(np.isfinite(g_sa_v))[0]
-            obs_nsa = np.where(np.isfinite(g_nsa_v))[0]
-            n_sa = len(np.intersect1d(obs_sa, era_t_idx))
-            n_nsa = len(np.intersect1d(obs_nsa, era_t_idx))
-
-            sig_sa_v = float(sigma_ces_sa[:, :, v].flatten().mean())
-            sig_nsa_v = float(sigma_ces_nsa[:, :, v].flatten().mean())
-
-            if n_sa > 0:
-                prec_sa = lambda_ces**2 / sig_sa_v**2
-                ces_rows.append((f"CES SA ({vintage_labels[v]})", n_sa, prec_sa, prec_sa * n_sa))
-            if n_nsa > 0:
-                prec_nsa = lambda_ces**2 / sig_nsa_v**2
-                ces_rows.append((f"CES NSA ({vintage_labels[v]})", n_nsa, prec_nsa, prec_nsa * n_nsa))
+        for src_label, obs_key, vidx_key, sigma_arr in [
+            ("CES SA", "ces_sa_obs", "ces_sa_vintage_idx", sigma_ces_sa),
+            ("CES NSA", "ces_nsa_obs", "ces_nsa_vintage_idx", sigma_ces_nsa),
+        ]:
+            obs = data[obs_key]
+            vidx = data[vidx_key]
+            in_era_mask = np.isin(obs, era_t_idx)
+            era_obs = obs[in_era_mask]
+            era_vidx = vidx[in_era_mask]
+            n = len(era_obs)
+            if n == 0:
+                continue
+            sigma_per = sigma_arr[era_vidx]
+            prec_per = lambda_ces**2 / sigma_per**2
+            total_prec = float(np.sum(prec_per))
+            avg_prec = total_prec / n
+            ces_rows.append((src_label, n, avg_prec, total_prec))
 
         # Provider counts in this era
         pp_rows: list[tuple[str, int, float, float]] = []
@@ -630,15 +605,11 @@ def plot_divergences(idata: az.InferenceData, data: dict) -> None:
     print(f"\nPlotting {n_divs} divergent transitions\u2026")
     div_flat = diverging.flatten().astype(bool)
 
-    # Build parameter pairs dynamically
-    has_era = "mu_g_era" in idata.posterior
+    phi_name = "phi_raw" if "phi_raw" in idata.posterior else "phi_raw_era"
     pairs: list[tuple[str, str, str, str]] = [
+        (phi_name, "tau", "\u03c6", "\u03c4"),
         ("lambda_ces", "alpha_ces", "\u03bb_CES", "\u03b1_CES"),
     ]
-    if "phi_1" in idata.posterior:
-        pairs.append(("phi_0", "phi_1", "\u03c6_0 (BD)", "\u03c6_1 (birth rate)"))
-    if not has_era:
-        pairs.insert(0, ("phi", "sigma_g", "\u03c6", "\u03c3_g"))
     for pp in data["pp_data"]:
         if pp["config"].error_model == "ar1":
             n = pp["config"].name.lower()
@@ -646,11 +617,17 @@ def plot_divergences(idata: az.InferenceData, data: dict) -> None:
                 (f"rho_{n}", f"sigma_pp_{n}", f"\u03c1_{pp['name']}", f"\u03c3_{pp['name']}")
             )
 
+    pairs = [(p1, p2, l1, l2) for p1, p2, l1, l2 in pairs
+             if p1 in idata.posterior and p2 in idata.posterior]
+    if not pairs:
+        print("  No plottable parameter pairs found \u2014 skipping.")
+        return
+
     n_pairs = len(pairs)
-    n_cols = 2
+    n_cols = min(2, n_pairs)
     n_rows = (n_pairs + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 5 * n_rows))
-    axes_flat = axes.flatten() if n_pairs > 2 else (axes.flatten() if n_pairs > 1 else [axes])
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 5 * n_rows), squeeze=False)
+    axes_flat = axes.flatten()
 
     for idx, (p1, p2, l1, l2) in enumerate(pairs):
         ax = axes_flat[idx]

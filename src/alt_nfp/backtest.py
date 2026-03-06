@@ -1,6 +1,6 @@
 """Real-time nowcast backtest with vintage-aware censoring.
 
-For each of the last *n* months the backtest:
+For each target month the backtest:
 
 1. Sets ``as_of = target_date`` so that only data published by that date
    is available — CES, QCEW, and cyclical indicators are all censored
@@ -9,15 +9,17 @@ For each of the last *n* months the backtest:
    (:data:`~alt_nfp.sampling.LIGHT_SAMPLER_KWARGS`).
 3. Compares the latent-state nowcast to the final CES release.
 
-This produces a realistic evaluation of the model's real-time nowcasting
-accuracy.  Results are reported both as growth-rate errors (percentage
-points) and as jobs-added errors (thousands).
+Results are persisted per-run to a timestamped directory under
+``output/backtest_runs/``.  Each iteration saves its InferenceData
+(``.nc``), and the full run saves a summary parquet and plot.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
+import arviz as az
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -53,7 +55,6 @@ def _vintage_frontier(data: dict) -> dict:
     ces_latest = dates[ces_sa_obs[-1]] if len(ces_sa_obs) > 0 else None
     qcew_latest = dates[qcew_obs[-1]] if len(qcew_obs) > 0 else None
 
-    # Try to extract per-period revision numbers from the filtered panel
     ces_revisions: dict[date, int] = {}
     panel = data.get("panel")
     if panel is not None and "revision_number" in panel.columns:
@@ -113,12 +114,25 @@ def _print_frontier(frontier: dict, target_date: date) -> None:
 # =========================================================================
 
 
+def _resolve_run_dir(output_dir: Path | None) -> Path:
+    """Return the run directory, creating it if needed."""
+    if output_dir is not None:
+        run_dir = output_dir
+    else:
+        ts = datetime.now().strftime("%Y-%m-%dT%H-%M")
+        run_dir = OUTPUT_DIR / "backtest_runs" / ts
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 def run_backtest(
     n_backtest: int = 24,
     *,
+    start_date: date | None = None,
+    output_dir: Path | None = None,
     use_era_specific: bool = True,
-) -> list[dict]:
-    """Run the real-time nowcast backtest over the last *n_backtest* months.
+) -> pl.DataFrame:
+    """Run the real-time nowcast backtest.
 
     For each target month T, the model sees only data published by date T
     (the 12th of the target month).  This means:
@@ -134,17 +148,26 @@ def run_backtest(
     Parameters
     ----------
     n_backtest : int
-        Number of trailing months to backtest (default 24).
+        Number of months to backtest (default 24).
+    start_date : date, optional
+        First target month.  When provided the backtest runs forward from
+        ``start_date`` for ``n_backtest`` months (or to the panel end,
+        whichever comes first).  When *None* (default) the backtest covers
+        the last ``n_backtest`` months of the panel.
+    output_dir : Path, optional
+        Directory for all run artifacts (InferenceData ``.nc`` files,
+        results parquet, plot).  Defaults to a timestamped subdirectory
+        under ``output/backtest_runs/``.
     use_era_specific : bool, optional
         If True (default), use era-specific latent parameters when
         ``era_idx`` is in the data dict.
 
     Returns
     -------
-    list[dict]
+    pl.DataFrame
         Per-month result records with actual vs nowcast metrics.
     """
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    run_dir = _resolve_run_dir(output_dir)
 
     panel_full = build_panel()
 
@@ -158,16 +181,34 @@ def run_backtest(
     ces_sa_index = levels["ces_sa_index"].to_numpy().astype(float)
     base_index = float(ces_sa_index[0])
 
-    if T < n_backtest:
-        raise ValueError(f"Need at least {n_backtest} months, got T={T}")
+    base_row_idx = int(np.argmin(np.abs(ces_sa_index - 100.0)))
+    ces_sa_base_level = levels["ces_sa_level"].to_numpy().astype(float)[base_row_idx]
+    idx_to_level = ces_sa_base_level / 100.0
 
-    target_indices = list(range(T - n_backtest, T))
+    # Resolve target indices from start_date / n_backtest
+    if start_date is not None:
+        first_idx = next(
+            (i for i, d in enumerate(dates) if d >= start_date),
+            T,
+        )
+        last_idx = min(first_idx + n_backtest, T)
+        if first_idx >= T:
+            raise ValueError(
+                f"start_date {start_date} is beyond the panel end ({dates[-1]})"
+            )
+        target_indices = list(range(first_idx, last_idx))
+    else:
+        if T < n_backtest:
+            raise ValueError(f"Need at least {n_backtest} months, got T={T}")
+        target_indices = list(range(T - n_backtest, T))
+
     target_dates = [dates[i] for i in target_indices]
+    n_runs = len(target_indices)
 
     results: list[dict] = []
 
     for run, (t_idx, target_date) in enumerate(zip(target_indices, target_dates)):
-        print(f"\n--- Nowcast backtest {run + 1}/{n_backtest}: {target_date} ---")
+        print(f"\n--- Nowcast backtest {run + 1}/{n_runs}: {target_date} ---")
 
         panel = build_panel(as_of_ref=target_date)
         data = panel_to_model_data(panel, PROVIDERS, as_of=target_date)
@@ -179,8 +220,20 @@ def run_backtest(
         model = build_model(data)
         idata = sample_model(model, sampler_kwargs=LIGHT_SAMPLER_KWARGS)
 
+        # Persist InferenceData for later analysis
+        nc_path = run_dir / f"{target_date:%Y-%m}.nc"
+        idata.to_netcdf(str(nc_path))
+        print(f"  Saved: {nc_path}")
+
         g_sa_post = idata.posterior["g_total_sa"].values
-        g_sa_mean = np.nanmean(g_sa_post, axis=(0, 1))
+        alpha_post = idata.posterior["alpha_ces"].values
+        lambda_post = idata.posterior["lambda_ces"].values
+
+        # Posterior predictive for CES SA: transform latent growth through
+        # the CES observation equation so the nowcast is in the same space
+        # as the actual CES print we compare against.
+        g_ces_pred = alpha_post[:, :, None] + lambda_post[:, :, None] * g_sa_post
+        g_sa_mean = np.nanmean(g_ces_pred, axis=(0, 1))
 
         # Map target_date to the censored model's index (the censored
         # model may have fewer time steps than the full model).
@@ -203,25 +256,34 @@ def run_backtest(
         prev_index = nowcast_index_series[c_idx]
 
         actual_growth = g_ces_sa_actual[t_idx]
-        actual_index = (
-            ces_sa_index[t_idx + 1] if t_idx + 1 < len(ces_sa_index) else np.nan
-        )
+        actual_index = ces_sa_index[t_idx]
+        prev_actual_index = ces_sa_index[t_idx - 1] if t_idx > 0 else np.nan
 
-        actual_change_k = (actual_index - ces_sa_index[t_idx]) / 1000.0
-        nowcast_change_k = (nowcast_index - prev_index) / 1000.0
+        actual_level = actual_index * idx_to_level
+        prev_level = prev_actual_index * idx_to_level
+        nowcast_level = nowcast_index * idx_to_level
+        prev_nowcast_level = prev_index * idx_to_level
+
+        actual_change_k = (actual_level - prev_level) / 1000.0
+        nowcast_change_k = (nowcast_level - prev_nowcast_level) / 1000.0
         error_change_k = actual_change_k - nowcast_change_k
 
         err_growth_pp = (nowcast_growth - actual_growth) * 100
-        err_level_k = (actual_index - nowcast_index) / 1000.0
+        err_level_k = (actual_level - nowcast_level) / 1000.0
 
-        # Track which sources have data for the target month (use c_idx)
+        # Per-source availability flags for the target month
+        has_ces = c_idx in data["ces_sa_obs"]
+        has_qcew = c_idx in data["qcew_obs"]
+        provider_flags: dict[str, bool] = {}
         sources: list[str] = []
-        if c_idx in data["ces_sa_obs"]:
+        if has_ces:
             sources.append("CES")
-        if c_idx in data["qcew_obs"]:
+        if has_qcew:
             sources.append("QCEW")
         for pp in data["pp_data"]:
-            if c_idx in pp["pp_obs"]:
+            present = c_idx in pp["pp_obs"]
+            provider_flags[pp["name"]] = present
+            if present:
                 sources.append(pp["name"])
         sources_str = "+".join(sources) if sources else "none"
 
@@ -234,9 +296,12 @@ def run_backtest(
                 "actual_change_k": actual_change_k,
                 "nowcast_change_k": nowcast_change_k,
                 "error_change_k": error_change_k,
-                "actual_level_k": actual_index / 1000.0,
-                "nowcast_level_k": nowcast_index / 1000.0,
+                "actual_level_k": actual_level / 1000.0,
+                "nowcast_level_k": nowcast_level / 1000.0,
                 "error_level_k": err_level_k,
+                "has_ces": has_ces,
+                "has_qcew": has_qcew,
+                **{f"has_{k}": v for k, v in provider_flags.items()},
                 "sources": sources_str,
                 "ces_latest": frontier["ces_latest"],
                 "qcew_latest": frontier["qcew_latest"],
@@ -248,10 +313,15 @@ def run_backtest(
             f"error {error_change_k:+,.0f}k  [{sources_str}]"
         )
 
-    _print_results_table(results, n_backtest)
-    _plot_backtest(results)
+    results_df = pl.DataFrame(results)
+    parquet_path = run_dir / "backtest_results.parquet"
+    results_df.write_parquet(parquet_path)
+    print(f"\nSaved: {parquet_path}")
 
-    return results
+    _print_results_table(results_df, n_runs)
+    _plot_backtest(results_df, run_dir)
+
+    return results_df
 
 
 # =========================================================================
@@ -259,11 +329,11 @@ def run_backtest(
 # =========================================================================
 
 
-def _print_results_table(results: list[dict], n_backtest: int) -> None:
+def _print_results_table(results: pl.DataFrame, n_backtest: int) -> None:
     """Print console summary table."""
     print("\n" + "=" * 120)
     print(
-        f"NOWCAST BACKTEST (real-time vintage): Last {n_backtest} months "
+        f"NOWCAST BACKTEST (real-time vintage): {n_backtest} months "
         f"(jobs added = month-over-month change, SA)"
     )
     print("=" * 120)
@@ -273,21 +343,26 @@ def _print_results_table(results: list[dict], n_backtest: int) -> None:
         f"{'Error (pp)':>9}  {'CES thru':>12} {'QCEW thru':>12}"
     )
     print("-" * 120)
-    for r in results:
-        ces_str = str(r["ces_latest"]) if r["ces_latest"] else "—"
-        qcew_str = str(r["qcew_latest"]) if r["qcew_latest"] else "—"
+    for row in results.iter_rows(named=True):
+        ces_str = str(row["ces_latest"]) if row["ces_latest"] else "\u2014"
+        qcew_str = str(row["qcew_latest"]) if row["qcew_latest"] else "\u2014"
         print(
-            f'{str(r["date"]):>12}  {r["actual_change_k"]:>+10,.0f}  '
-            f'{r["nowcast_change_k"]:>+10,.0f}  '
-            f'{r["error_change_k"]:>+9,.0f}  '
-            f'{r["actual_growth_pct"]:>+7.3f}  '
-            f'{r["nowcast_growth_pct"]:>+7.3f}  '
-            f'{r["error_growth_pp"]:>+8.3f}  '
+            f'{str(row["date"]):>12}  {row["actual_change_k"]:>+10,.0f}  '
+            f'{row["nowcast_change_k"]:>+10,.0f}  '
+            f'{row["error_change_k"]:>+9,.0f}  '
+            f'{row["actual_growth_pct"]:>+7.3f}  '
+            f'{row["nowcast_growth_pct"]:>+7.3f}  '
+            f'{row["error_growth_pp"]:>+8.3f}  '
             f'{ces_str:>12} {qcew_str:>12}'
         )
 
-    mae_gr, rmse_gr = _mae_rmse(results, "error_growth_pp")
-    mae_chg, rmse_chg = _mae_rmse(results, "error_change_k")
+    errs_gr = results["error_growth_pp"].to_numpy()
+    errs_chg = results["error_change_k"].to_numpy()
+
+    mae_gr = float(np.mean(np.abs(errs_gr)))
+    rmse_gr = float(np.sqrt(np.mean(errs_gr**2)))
+    mae_chg = float(np.mean(np.abs(errs_chg)))
+    rmse_chg = float(np.sqrt(np.mean(errs_chg**2)))
 
     print("-" * 120)
     print(
@@ -297,55 +372,79 @@ def _print_results_table(results: list[dict], n_backtest: int) -> None:
     )
 
 
-def _plot_backtest(results: list[dict]) -> None:
-    """Two-panel figure: growth actual vs nowcast, and jobs-added error."""
-    x_dates = [r["date"] for r in results]
-    actual_gr = [r["actual_growth_pct"] for r in results]
-    nowcast_gr = [r["nowcast_growth_pct"] for r in results]
+def _plot_backtest(results: pl.DataFrame, run_dir: Path) -> None:
+    """Two-panel figure: jobs-added actual vs nowcast, and source availability."""
+    x_dates = results["date"].to_list()
+    actual_chg = results["actual_change_k"].to_numpy()
+    nowcast_chg = results["nowcast_change_k"].to_numpy()
+    n = len(x_dates)
 
-    fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+    fig, axes = plt.subplots(
+        2, 1, figsize=(14, 8), sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
 
+    # --- Top panel: side-by-side jobs-added bars ---
     ax = axes[0]
-    ax.plot(x_dates, actual_gr, "o-", color="darkorange", label="Actual CES SA growth", ms=8)
-    ax.plot(x_dates, nowcast_gr, "s--", color="steelblue", label="Nowcast (model)", ms=6)
-    for i, (a, n) in enumerate(zip(actual_gr, nowcast_gr)):
-        ax.vlines(x_dates[i], a, n, color="gray", alpha=0.6, lw=1)
+    bar_width = 10
+    x_num = mdates.date2num(x_dates)
+    ax.bar(
+        x_num - bar_width / 2, actual_chg, width=bar_width,
+        color="darkorange", alpha=0.85, label="Actual",
+    )
+    ax.bar(
+        x_num + bar_width / 2, nowcast_chg, width=bar_width,
+        color="steelblue", alpha=0.85, label="Nowcast",
+    )
     ax.axhline(0, color="k", lw=0.5, ls="--")
-    ax.set_ylabel("Monthly growth (%)")
-    ax.set_title("SA Total Employment Growth: Actual vs Real-Time Nowcast")
+    ax.set_ylabel("Jobs added (thousands, SA)")
+    ax.set_title("Month-over-Month Jobs Added: Actual vs Real-Time Nowcast")
     ax.legend(loc="upper right")
+    ax.xaxis_date()
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
     ax.grid(axis="y", alpha=0.3)
 
+    mae_chg = float(np.mean(np.abs(actual_chg - nowcast_chg)))
+    rmse_chg = float(np.sqrt(np.mean((actual_chg - nowcast_chg) ** 2)))
+    ax.text(
+        0.01, 0.02,
+        f"MAE = {mae_chg:,.0f}k    RMSE = {rmse_chg:,.0f}k",
+        transform=ax.transAxes, fontsize=9, color="gray",
+        verticalalignment="bottom",
+    )
+
+    # --- Bottom panel: data-source availability strip ---
     ax = axes[1]
-    ax.bar(
-        x_dates,
-        [r["error_change_k"] for r in results],
-        color="steelblue",
-        alpha=0.7,
-        width=18,
-        label="Error in jobs added",
-    )
-    ax.axhline(0, color="k", lw=0.5, ls="--")
-    ax.set_ylabel("Error (thousands)")
-    ax.set_title(
-        "Nowcast Error in Jobs Added "
-        "(Actual \u2212 Nowcast; positive = we under-nowcast gain)"
-    )
-    ax.legend(loc="upper right")
+
+    source_cols = ["has_ces", "has_qcew"]
+    source_labels = ["CES", "QCEW"]
+    provider_cols = [c for c in results.columns if c.startswith("has_") and c not in source_cols]
+    source_cols += provider_cols
+    source_labels += [c.removeprefix("has_").upper() for c in provider_cols]
+
+    n_sources = len(source_cols)
+    for s_idx, (col, label) in enumerate(zip(source_cols, source_labels)):
+        flags = results[col].to_numpy()
+        for t_idx in range(n):
+            color = "#2ca02c" if flags[t_idx] else "#d62728"
+            marker = "o" if flags[t_idx] else "x"
+            ax.plot(
+                x_dates[t_idx], s_idx, marker=marker, color=color,
+                ms=6, mew=1.5,
+            )
+
+    ax.set_yticks(range(n_sources))
+    ax.set_yticklabels(source_labels)
+    ax.set_ylim(-0.5, n_sources - 0.5)
+    ax.invert_yaxis()
+    ax.set_title("Data Source Availability at Target Month")
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
-    ax.grid(axis="y", alpha=0.3)
+    ax.grid(axis="x", alpha=0.3)
 
     plt.tight_layout()
-    fig.savefig(OUTPUT_DIR / "nowcast_backtest.png", dpi=150, bbox_inches="tight")
+    plot_path = run_dir / "nowcast_backtest.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"\nSaved: {OUTPUT_DIR / 'nowcast_backtest.png'}")
-
-
-def _mae_rmse(lst: list[dict], key: str) -> tuple[float, float]:
-    if not lst:
-        return float("nan"), float("nan")
-    errs = np.array([x[key] for x in lst])
-    return float(np.mean(np.abs(errs))), float(np.sqrt(np.mean(errs**2)))
+    print(f"Saved: {plot_path}")

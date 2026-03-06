@@ -8,36 +8,80 @@ alwaysApply: true
 ## QCEW observation noise
 - **Student-t likelihood**: QCEW uses `pm.StudentT` with fixed `nu = QCEW_NU` (default 5, in `config.py`). Heavier tails provide robustness to non-Gaussian QCEW error (NAICS reclassification, timing mismatches) and reduce per-observation precision by a factor of `(nu+1)/(nu+3)` vs Normal (0.75 at nu=5).
 - **Two tiers**: M2 months (Feb, May, Aug, Nov) use `sigma_qcew_mid`; M3 and M1 (incl. January) use `sigma_qcew_boundary`. Per-obs sigma = base × `qcew_noise_mult` from `revision_schedules.get_noise_multiplier("qcew_Q1".."qcew_Q4", rev)`.
+- **Era-specific boundary multipliers**: Post-COVID boundary months (M1+M3) get an additional multiplicative era factor from `QCEW_POST_COVID_BOUNDARY_ERA_MULT` in `config.py`, keyed by revision number ({0: 5.0, 1: 3.5, 2: 2.0}). M2 months are era-invariant. Applied in `panel_adapter.py` after the base revision multiplier.
 - **M2 prior tightened**: `LOG_SIGMA_QCEW_MID_SD = 0.15` (was 0.25) constrains the posterior to stay near the 0.05%/mo center, preventing extreme precision dominance.
 - Data dict uses `qcew_is_m2` and `qcew_noise_mult` (not `qcew_is_m3`). Diagnostics use "QCEW (M2)" and "QCEW (M3+M1)".
 - Empirical multiplier calibration uses **2017+** only (not earlier revisions).
+- **Era-specific revision noise** (empirical, 2017-2019 vs 2022+): QCEW early-vintage (rev 0) revision RMSE is ~4.6x larger post-pandemic; rev 1 is ~2.9x; rev 2 is ~2.1x. The increase is concentrated in M3+M1 boundary months (up to 10x for Q2 rev 0). M2 months are approximately era-invariant (ratios near 1.0). CES revisions are ~1.6-2.0x larger post-pandemic across all vintages, with SA more affected than NSA.
+
+## QCEW data collection (UI tax filings)
+- QCEW employment is reported on a **quarterly UI tax form** (QCEW-1 / state equivalent) that each UI-covered employer files in M3 (the last month of the quarter). The form reports employment counts for all three months (M1, M2, M3) of the quarter.
+- **M1 and M2 are actual employment** reported retrospectively on the M3 filing — BLS does not allocate or impute them from a quarterly total. M2's revision stability comes from being an interior month with no boundary effects (NAICS reclassification, late filings straddling quarters, year-end adjustments) rather than from allocation mechanics.
+- **M3 is the contemporaneous month** on the filing. Its noise comes from late filers, timing mismatches with the pay-period-including-the-12th reference concept, and some monthly payers who may report irregularly for M3.
+- **M1 boundary noise** arises from NAICS reclassifications (especially January = new tax year), late prior-quarter filings contaminating the M1 count, and year-start administrative adjustments — not from allocation.
 
 ## LogNormal priors (avoiding zero-boundary funnels)
-- All small-sigma parameters use **LogNormal** priors (not HalfNormal) to prevent collapse toward zero: `sigma_qcew_mid`, `sigma_qcew_boundary`, `sigma_fourier`.
-- Config constants: `LOG_SIGMA_QCEW_MID_MU`/`_SD`, `LOG_SIGMA_QCEW_BOUNDARY_MU`/`_SD`, `LOG_SIGMA_FOURIER_MU`/`_SD`.
+- All small-sigma parameters use **LogNormal** priors (not HalfNormal) to prevent collapse toward zero: `tau` (AR(1) marginal SD), `sigma_bd`, `sigma_qcew_mid`, `sigma_qcew_boundary`, `sigma_fourier`, `sigma_ces_sa`, `sigma_ces_nsa`.
+- Config constants: `LOG_TAU_MU`/`_SD`, `LOG_SIGMA_BD_MU`/`_SD`, `LOG_SIGMA_QCEW_MID_MU`/`_SD`, `LOG_SIGMA_QCEW_BOUNDARY_MU`/`_SD`, `LOG_SIGMA_FOURIER_MU`/`_SD`, `LOG_SIGMA_CES_MU`/`_SD`.
 - `sigma_fourier` uses `LOG_SIGMA_FOURIER_MU - log(k)` for harmonic k (1/k scaling in log-space).
+- `sigma_ces_sa`/`sigma_ces_nsa` use `LogNormal(LOG_SIGMA_CES_MU, LOG_SIGMA_CES_SD)` with dynamic `shape=n_ces_vintages` (only vintages with observations get a sigma parameter).
+
+## AR(1) latent process reparameterization (tau) and shared phi
+- The AR(1) latent growth process is parameterized in terms of **marginal SD `tau`** (stationary SD of the process) rather than the innovation SD `sigma_g`. This breaks the phi-sigma ridge that causes low ESS when phi is near 1. `sigma_g = tau * sqrt(1 - phi^2)` is derived in the model, not sampled directly.
+- `tau ~ LogNormal(LOG_TAU_MU, LOG_TAU_SD)` with `LOG_TAU_MU = log(0.013)`, `LOG_TAU_SD = 0.5` in `config.py`. Calibration: posterior sigma_g ~ 0.008, phi ~ 0.8 → tau ~ 0.013.
+- **Phi is shared across eras** — `phi_raw ~ Beta(18, 2)` is a single scalar, not era-indexed. The eras differ primarily in mean growth (`mu_g_era`), not in persistence dynamics. With ~96 Pre-COVID and ~60 Post-COVID months, era-specific phi was underpowered and produced pathological modes (Pre-COVID collapsing to 0.99, Post-COVID dropping to 0.37). Pooling both eras (~150+ months) gives much better identification and produces economically reasonable phi values (~0.8-0.95), consistent with the macro literature on employment growth persistence.
+- **Phi is capped at 0.99** via `pt.minimum(phi_raw, 0.99)` to prevent the unit-root boundary.
+- Since phi and sigma_g are both scalar, they are passed as **non-sequences** to `pytensor.scan` in both the era-specific and scalar fallback branches. Only `mu_g` (era-indexed) is a sequence.
+- `forecast.py` derives `sigma_g_post = tau_post * sqrt(1 - phi_post**2)` from the posterior. `phi_raw` is read as scalar (no era indexing).
+- Diagnostics report `phi_raw` and `tau` (not `sigma_g` or `phi_raw_era`) in the parameter summary. `print_era_summary()` reports `mu_g` per era and phi once (shared).
 
 ## Provider data
 - Provider series (e.g. G) can start mid-sample (e.g. 2019-01). Birth-rate and provider growth means are computed **only over the window where that provider has data** to avoid empty-slice warnings and wrong priors.
 
 ## Structural BD model
-- `bd_t = φ₀ + φ₁·birth_rate_c + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, jolts]`.
+- `bd_t = φ₀ + φ₃·X^cycle + σ_bd·ξ_t` where `X^cycle = [claims, jolts]`.
+- `σ_bd ~ LogNormal(LOG_SIGMA_BD_MU, LOG_SIGMA_BD_SD)` — LogNormal avoids the zero-boundary funnel that HalfNormal created for this small-scale parameter.
+- `φ₁` (birth rate) was removed — posterior was indistinguishable from zero (HDI spanning [−0.5, +0.5]). `birth_rate_c` is still computed in `panel_adapter.py` but not consumed by the model.
 - `φ₂` (QCEW BD lag) was removed — posterior was indistinguishable from zero. `bd_qcew_c` still computed in `panel_adapter.py` for the BD diagnostic scatter plot.
 - NFCI and biz_apps were removed from `CYCLICAL_INDICATORS` — posteriors were zero. Only claims and JOLTS remain.
 
 ## Forecast and levels
-- `forecast.py` expects `data["levels"]` with columns: `ref_date`, `ces_sa_index`, `ces_nsa_index`, `ces_sa_level`, `ces_nsa_level`, and each provider’s `emp_col`. If `ces_sa_level`/`ces_nsa_level` are missing (e.g. national panel without `employment_level`), forecast will raise `ColumnNotFoundError`; ensure `panel_to_model_data()` is called with a national panel that has employment levels when forecast is run.
+- `forecast.py` expects `data["levels"]` with columns: `ref_date`, `ces_sa_index`, `ces_nsa_index`, `ces_sa_level`, `ces_nsa_level`, and each provider's `emp_col`. If `ces_sa_level`/`ces_nsa_level` are missing (e.g. national panel without `employment_level`), forecast will raise `ColumnNotFoundError`; ensure `panel_to_model_data()` is called with a national panel that has employment levels when forecast is run.
+
+## Model time horizon and eras
+- **Sample starts 2012** (`build_panel(start_year=2012)`). The Pre-GFC era (2003-2008) was dropped — its parameters contribute nothing to the nowcast/forecast, and removing it cuts the `pytensor.scan` length by ~40%.
+- **Two eras**: `N_ERAS = 2`, `ERA_BREAKS = [date(2020, 1, 1)]`. Era 0 = Pre-COVID (2012-01 → 2019-12), Era 1 = Post-COVID (2020-01 → present). `forecast.py` uses the last era (Post-COVID) for `mu_g` in forward simulation.
+- **Era-specific vs shared parameters**: `mu_g_era` (mean growth) is era-indexed; `phi_raw` (persistence) and `tau` (marginal SD) are shared across eras. The eras differ in mean growth, not in autocorrelation dynamics.
+- The vintage store still holds data back to 2003 for completeness; only the model panel start is truncated.
+
+## CES best-available print (consolidated from 6 → 2 likelihoods)
+- **One observation per month per SA/NSA**, using the highest available revision (rev 2 > 1 > 0). Eliminates the 3× overcounting that occurred when correlated vintages (ρ > 0.99) were treated as independent likelihoods.
+- **Dynamic vintage sigma sizing**: `panel_adapter.py` remaps vintage indices (0=1st, 1=2nd, 2=Final) to a contiguous 0-based range covering only vintages that have observations. Data dict provides `n_ces_vintages` (int, number of observed vintages), `ces_vintage_map` (dict mapping original vintage → remapped index), and `ces_sa_vintage_idx`/`ces_nsa_vintage_idx` (remapped indices). This prevents ghost parameters for unobserved vintages (e.g. 2nd print often absent in best-available selection).
+- **CES loading prior**: `lambda_ces ~ TruncatedNormal(1.0, 0.1, lower=0.5)` prevents the degenerate mode where CES disconnects from the latent state (lambda → 0). The truncation at 0.5 is justified because CES measures the same payroll concept as QCEW; a loading below 0.5 is economically implausible.
+- **CES noise prior**: `sigma_ces_sa`/`sigma_ces_nsa ~ LogNormal(LOG_SIGMA_CES_MU, LOG_SIGMA_CES_SD)` with `shape=n_ces_vintages`. LogNormal prevents the zero-boundary funnel that InverseGamma allowed. Config constants: `LOG_SIGMA_CES_MU = log(0.002)`, `LOG_SIGMA_CES_SD = 0.5`.
+- Model uses `sigma_ces_sa[ces_sa_vintage_idx]` and `sigma_ces_nsa[ces_nsa_vintage_idx]` for per-observation noise — retaining vintage-specific sigma estimation without multi-counting.
+- `_ces_best_available()` in `panel_adapter.py` selects the best print; `build_obs_sources()` returns 2 CES entries (`obs_ces_sa`, `obs_ces_nsa`) instead of up to 6.
+- Diagnostics (`_ces_precision_rows`), residuals (color-coded by vintage via `ces_vintage_map`), and PPC all adapted.
 
 ## Diagnostics
 - Precision budget and source contributions use `_qcew_precision_by_tier(idata, data)` with posterior `sigma_qcew_mid`/`sigma_qcew_boundary` and `qcew_is_m2`/`qcew_noise_mult`. QCEW precision uses Student-t Fisher information: `(QCEW_NU+1)/((QCEW_NU+3)*sigma^2)`.
+- CES precision uses `_ces_precision_rows(idata, data)` which computes per-observation precision via `lambda_ces**2 / sigma_ces[vintage_idx]**2`.
 - Era-specific: `print_windowed_precision_budget()`, `print_provider_value_of_information()` (same-era comparison for g_cont HDI width with/without provider).
-- Standardised residuals: CES/provider residuals should be ~N(0,1); QCEW residuals follow t(nu) under the Student-t likelihood.
+- Standardised residuals: CES/provider residuals should be ~N(0,1); QCEW residuals follow t(nu) under the Student-t likelihood. CES residual plots color-code by vintage (orange=1st, red=2nd, green=Final).
 
 ## CES vintage selection
 - **V3 uses actual 3rd prints only** (`revision_number=2, benchmark_revision=0`). Benchmark-revised rows (`revision_number=-1` or `benchmark_revision>0`) are never used as CES observations. Benchmark information enters the model exclusively through QCEW.
-- In `panel_adapter.py`, `_vintage_series` v3 calls use `rev_values=(2,)`.
+- In `panel_adapter.py`, `_ces_best_available` filters to `revision_number.is_in([0, 1, 2])` and takes the highest available.
 - In `vintage_store.py`, `_select_ces_at_horizon` rank 3+ selects `(rev=2, bmr=0)`.
 
+## Nowcast backtest
+- **Configurable window**: `run_backtest(n_backtest=24, start_date=None, output_dir=None)`. When `start_date` is given, the backtest runs forward from that date for `n_backtest` months (clamped to panel end). When `None`, covers the last `n_backtest` months.
+- **Persistent artifacts**: Each run creates a directory (default: timestamped under `output/backtest_runs/`). Per-iteration InferenceData saved as `{run_dir}/{YYYY-MM}.nc`; summary as `{run_dir}/backtest_results.parquet`. Override via `output_dir` kwarg.
+- **Return type**: `pl.DataFrame` (not `list[dict]`). Columns include `has_ces`, `has_qcew`, and `has_<provider>` boolean flags alongside the scalar metrics.
+- **Plot**: Two panels — (1) side-by-side bars of actual vs nowcast jobs added (thousands, SA); (2) data-source availability strip (green circle = available, red X = missing) for CES, QCEW, and each provider at the target month. Saved to `{run_dir}/nowcast_backtest.png`.
+- **Sampler**: Uses `LIGHT_SAMPLER_KWARGS` (2000 draws, 2 chains) per iteration.
+
 ## Tests
-- Panel adapter tests expect `qcew_is_m2` and `qcew_noise_mult` (not `qcew_is_m3`). Precision budget tests mock `sigma_qcew_mid`, `sigma_qcew_boundary`, `qcew_is_m2`, `qcew_noise_mult`.
+- Panel adapter tests expect `qcew_is_m2`, `qcew_noise_mult`, `ces_sa_vintage_idx`, `ces_nsa_vintage_idx`, `n_ces_vintages`, and `ces_vintage_map` (not the old `g_ces_sa_by_vintage`). `test_vintage_index_arrays` validates the remap produces contiguous 0-based indices matching `n_ces_vintages`.
+- Precision budget tests mock the dynamic vintage structure: `sigma_ces` shape matches `n_ces_vintages`, vintage indices are remapped, and `ces_vintage_map` is included in the mock data dict.
 - Vintage store: `test_rank3plus_uses_actual_3rd_print` verifies rank 3+ selects `(rev=2, bmr=0)`, not max bmr.

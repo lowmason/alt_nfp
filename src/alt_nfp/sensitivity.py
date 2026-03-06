@@ -140,8 +140,6 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
             (f"\u03c3_ces_nsa_{vintage_labels[v]} (%)", "sigma_ces_nsa", v, 100, ".3f")
         )
     specs.append(("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"))
-    if np.any(data.get("birth_rate_c", np.zeros(1)) != 0.0):
-        specs.append(("\u03c6_1 (birth)", "phi_1", None, 1, ".3f"))
     specs.append(("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"))
     # Cyclical indicator loadings (phi_3) if available
     from .config import CYCLICAL_INDICATORS
@@ -173,38 +171,17 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
 
 def _precision_shares(idata, data: dict) -> dict[str, float]:
     """Return ``{source: share}`` of total precision."""
-    post = idata.posterior
-    lam_ces = post["lambda_ces"].values.flatten().mean()
-    sig_ces_sa = post["sigma_ces_sa"].values     # (chains, draws, 3)
-    sig_ces_nsa = post["sigma_ces_nsa"].values   # (chains, draws, 3)
+    from .diagnostics import _ces_precision_rows
 
     total_qcew, _, _, _, _ = _qcew_precision_by_tier(idata, data)
 
-    # CES vintage-specific precision
-    vintage_labels = ['1st', '2nd', 'Final']
     shares: dict[str, float] = {}
-    total_ces = 0.0
-    for v in range(3):
-        g_sa_v = data['g_ces_sa_by_vintage'][v]
-        g_nsa_v = data['g_ces_nsa_by_vintage'][v]
-        n_sa = int(np.sum(np.isfinite(g_sa_v)))
-        n_nsa = int(np.sum(np.isfinite(g_nsa_v)))
-
-        sv_sa = sig_ces_sa[:, :, v].flatten().mean()
-        sv_nsa = sig_ces_nsa[:, :, v].flatten().mean()
-
-        if n_sa > 0:
-            prec_sa = lam_ces**2 / sv_sa**2
-            total_sa = prec_sa * n_sa
-            shares[f"CES SA ({vintage_labels[v]})"] = total_sa
-            total_ces += total_sa
-        if n_nsa > 0:
-            prec_nsa = lam_ces**2 / sv_nsa**2
-            total_nsa = prec_nsa * n_nsa
-            shares[f"CES NSA ({vintage_labels[v]})"] = total_nsa
-            total_ces += total_nsa
+    ces_rows, total_ces = _ces_precision_rows(idata, data)
+    for label, _n, _avg, total_prec in ces_rows:
+        shares[label] = total_prec
 
     total_pp = 0.0
+    post = idata.posterior
     for pp in data["pp_data"]:
         name = pp["config"].name.lower()
         sig_p = post[f"sigma_pp_{name}"].values.flatten().mean()
