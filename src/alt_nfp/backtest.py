@@ -264,12 +264,12 @@ def run_backtest(
         nowcast_level = nowcast_index * idx_to_level
         prev_nowcast_level = prev_index * idx_to_level
 
-        actual_change_k = (actual_level - prev_level) / 1000.0
-        nowcast_change_k = (nowcast_level - prev_nowcast_level) / 1000.0
+        actual_change_k = actual_level - prev_level
+        nowcast_change_k = nowcast_level - prev_nowcast_level
         error_change_k = actual_change_k - nowcast_change_k
 
         err_growth_pp = (nowcast_growth - actual_growth) * 100
-        err_level_k = (actual_level - nowcast_level) / 1000.0
+        err_level_k = actual_level - nowcast_level
 
         # Per-source availability flags for the target month
         has_ces = c_idx in data["ces_sa_obs"]
@@ -296,8 +296,8 @@ def run_backtest(
                 "actual_change_k": actual_change_k,
                 "nowcast_change_k": nowcast_change_k,
                 "error_change_k": error_change_k,
-                "actual_level_k": actual_level / 1000.0,
-                "nowcast_level_k": nowcast_level / 1000.0,
+                "actual_level_k": actual_level,
+                "nowcast_level_k": nowcast_level,
                 "error_level_k": err_level_k,
                 "has_ces": has_ces,
                 "has_qcew": has_qcew,

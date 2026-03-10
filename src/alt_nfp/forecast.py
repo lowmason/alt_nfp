@@ -126,15 +126,15 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
     lvl_sa_fwd = idx_sa_fwd * idx_to_sa
     lvl_nsa_fwd = idx_nsa_fwd * idx_to_nsa
 
-    chg_sa_hist = (lvl_sa_hist[:, :, 1:] - lvl_sa_hist[:, :, :-1]) / 1000.0
-    chg_nsa_hist = (lvl_nsa_hist[:, :, 1:] - lvl_nsa_hist[:, :, :-1]) / 1000.0
+    chg_sa_hist = lvl_sa_hist[:, :, 1:] - lvl_sa_hist[:, :, :-1]
+    chg_nsa_hist = lvl_nsa_hist[:, :, 1:] - lvl_nsa_hist[:, :, :-1]
     chg_sa_fwd = np.zeros((n_chains, n_draws, n_fwd))
     chg_nsa_fwd = np.zeros((n_chains, n_draws, n_fwd))
-    chg_sa_fwd[:, :, 0] = (lvl_sa_fwd[:, :, 0] - lvl_sa_hist[:, :, -1]) / 1000.0
-    chg_nsa_fwd[:, :, 0] = (lvl_nsa_fwd[:, :, 0] - lvl_nsa_hist[:, :, -1]) / 1000.0
+    chg_sa_fwd[:, :, 0] = lvl_sa_fwd[:, :, 0] - lvl_sa_hist[:, :, -1]
+    chg_nsa_fwd[:, :, 0] = lvl_nsa_fwd[:, :, 0] - lvl_nsa_hist[:, :, -1]
     for i in range(1, n_fwd):
-        chg_sa_fwd[:, :, i] = (lvl_sa_fwd[:, :, i] - lvl_sa_fwd[:, :, i - 1]) / 1000.0
-        chg_nsa_fwd[:, :, i] = (lvl_nsa_fwd[:, :, i] - lvl_nsa_fwd[:, :, i - 1]) / 1000.0
+        chg_sa_fwd[:, :, i] = lvl_sa_fwd[:, :, i] - lvl_sa_fwd[:, :, i - 1]
+        chg_nsa_fwd[:, :, i] = lvl_nsa_fwd[:, :, i] - lvl_nsa_fwd[:, :, i - 1]
 
     _print_jobs_table(dates, forecast_dates, chg_sa_hist, chg_nsa_hist, chg_sa_fwd, chg_nsa_fwd)
     _print_growth_table(forecast_dates, g_sa_fwd, g_nsa_fwd)
@@ -189,7 +189,7 @@ def _print_jobs_table(dates, forecast_dates, c_sa_h, c_nsa_h, c_sa_f, c_nsa_f):
     """Print console table of month-over-month jobs added (thousands)."""
     print("\n" + "=" * 84)
     print("FORECAST: Jobs added (month-over-month change, thousands)")
-    print("  Positive = jobs added, negative = jobs lost.  Base ref: CES at index 100.")
+    print("  Positive = jobs added, negative = jobs lost.")
     print("=" * 84)
     print(f"{'Date':>12}  {'SA Mean':>10} {'SA 80% HDI':>22}  "
           f"{'NSA Mean':>10} {'NSA 80% HDI':>22}")
@@ -304,8 +304,8 @@ def _plot_jobs_forecast(
     obs_sa_levels = levels["ces_sa_level"].to_numpy().astype(float)
     obs_nsa_levels = levels["ces_nsa_level"].to_numpy().astype(float)
     base_dates = levels["ref_date"].to_list()
-    obs_chg_sa = (obs_sa_levels[1:] - obs_sa_levels[:-1]) / 1000.0
-    obs_chg_nsa = (obs_nsa_levels[1:] - obs_nsa_levels[:-1]) / 1000.0
+    obs_chg_sa = obs_sa_levels[1:] - obs_sa_levels[:-1]
+    obs_chg_nsa = obs_nsa_levels[1:] - obs_nsa_levels[:-1]
     obs_chg_dates = base_dates[1:]
 
     n_recent = 24

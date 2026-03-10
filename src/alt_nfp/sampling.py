@@ -13,6 +13,8 @@ Three preset configurations are exported for different use cases:
 
 from __future__ import annotations
 
+import warnings
+
 import arviz as az
 import pymc as pm
 
@@ -63,6 +65,12 @@ def sample_model(
         sampler_kwargs = DEFAULT_SAMPLER_KWARGS
 
     with model:
+        warnings.filterwarnings(
+            "ignore",
+            message="Numba will use object mode",
+            category=UserWarning,
+            module=r"pytensor\.link\.numba",
+        )
         try:
             idata = pm.sample(nuts_sampler="nutpie", **sampler_kwargs)
             sampler_used = "nutpie"

@@ -14,6 +14,8 @@ Implements the predictive-check steps of the Bayesian workflow
 
 from __future__ import annotations
 
+import warnings
+
 import arviz as az
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -239,8 +241,63 @@ def print_era_summary(idata: az.InferenceData) -> None:
 # =========================================================================
 
 
+def _obs_time_indices(data: dict) -> dict[str, np.ndarray]:
+    """Map likelihood var_name → array of time-step indices into data["dates"]."""
+    idx_map: dict[str, np.ndarray] = {}
+    if len(data["ces_sa_obs"]) > 0:
+        idx_map["obs_ces_sa"] = data["ces_sa_obs"]
+    if len(data["ces_nsa_obs"]) > 0:
+        idx_map["obs_ces_nsa"] = data["ces_nsa_obs"]
+    idx_map["obs_qcew"] = data["qcew_obs"]
+    for pp in data["pp_data"]:
+        if len(pp["pp_obs"]) > 0:
+            idx_map[f"obs_{pp['config'].name.lower()}"] = pp["pp_obs"]
+    return idx_map
+
+
+def _print_loo_outliers(
+    label: str,
+    khat: np.ndarray,
+    elpd_i: np.ndarray,
+    dates: list,
+    time_idx: np.ndarray | None,
+    obs_vals: np.ndarray,
+    *,
+    max_rows: int = 10,
+) -> None:
+    """Print a table of LOO outlier observations sorted by pointwise ELPD."""
+    elpd_mean = float(np.mean(elpd_i))
+    elpd_std = float(np.std(elpd_i))
+    threshold = elpd_mean - 2.0 * elpd_std
+
+    flagged = np.where((khat > 0.5) | (elpd_i < threshold))[0]
+    if len(flagged) == 0:
+        return
+
+    order = np.argsort(elpd_i[flagged])
+    flagged = flagged[order][:max_rows]
+
+    print(f"  {'Date':>12}  {'k-hat':>7}  {'ELPD_i':>8}  {'g_obs':>10}  Flag")
+    for j in flagged:
+        dt_str = str(dates[time_idx[j]]) if time_idx is not None else f"idx {j}"
+        flag = "BAD" if khat[j] > 0.7 else ("WARN" if khat[j] > 0.5 else "ELPD")
+        print(
+            f"  {dt_str:>12}  {khat[j]:7.3f}  {elpd_i[j]:+8.1f}"
+            f"  {obs_vals[j]:+10.5f}  {flag}"
+        )
+    print(f"  (mean ELPD_i = {elpd_mean:+.1f}, flagged if k-hat > 0.5 "
+          f"or ELPD_i < {threshold:+.1f})")
+
+
 def run_loo_cv(model: pm.Model, idata: az.InferenceData, data: dict) -> None:
-    """Compute LOO-CV per source and visualise k-hat diagnostics."""
+    """Compute LOO-CV per source, list outliers, and visualise k-hat diagnostics.
+
+    For each source, prints summary statistics and a table of flagged
+    observations (k-hat > 0.5 or pointwise ELPD more than 2 SD below
+    the source mean), sorted by worst ELPD first.  This is the primary
+    diagnostic value of LOO in a state-space model — identifying
+    observations where the noise model is most strained.
+    """
     if not hasattr(idata, "log_likelihood"):
         print("Computing log-likelihood for LOO-CV\u2026")
         try:
@@ -253,9 +310,13 @@ def run_loo_cv(model: pm.Model, idata: az.InferenceData, data: dict) -> None:
 
     obs_sources = build_obs_sources(data)
     source_list = list(obs_sources.items())
+    time_idx_map = _obs_time_indices(data)
+    all_dates = data["dates"]
 
     print("\n" + "=" * 72)
     print("LEAVE-ONE-OUT CROSS-VALIDATION (PSIS-LOO)")
+    print("  Note: LOO measures interpolation consistency, not forecast")
+    print("  skill.  Outlier table flags potential data anomalies.")
     print("=" * 72)
 
     n_src = len(source_list)
@@ -264,14 +325,17 @@ def run_loo_cv(model: pm.Model, idata: az.InferenceData, data: dict) -> None:
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4.5 * n_rows))
     axes_flat = axes.flatten()
 
-    for idx, (var_name, (label, _obs)) in enumerate(source_list):
+    for idx, (var_name, (label, obs_vals)) in enumerate(source_list):
         ax = axes_flat[idx]
         try:
-            loo_result = az.loo(idata, var_name=var_name, pointwise=True)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Estimated shape parameter")
+                loo_result = az.loo(idata, var_name=var_name, pointwise=True)
             elpd = loo_result.elpd_loo
             se = loo_result.se
             p_loo = loo_result.p_loo
             khat = np.asarray(loo_result.pareto_k)
+            elpd_i = np.asarray(loo_result.loo_i)
 
             n_high = int(np.sum(khat > 0.7))
             n_warn = int(np.sum((khat > 0.5) & (khat <= 0.7)))
@@ -281,6 +345,11 @@ def run_loo_cv(model: pm.Model, idata: az.InferenceData, data: dict) -> None:
             print(f"  p_loo:    {p_loo:.1f}")
             print(f"  k-hat > 0.7 (bad):  {n_high}")
             print(f"  k-hat > 0.5 (warn): {n_warn}")
+
+            _print_loo_outliers(
+                label, khat, elpd_i, all_dates,
+                time_idx_map.get(var_name), obs_vals,
+            )
 
             colors = np.where(khat > 0.7, "red", np.where(khat > 0.5, "orange", "steelblue"))
             ax.scatter(range(len(khat)), khat, s=8, c=colors, alpha=0.6)
