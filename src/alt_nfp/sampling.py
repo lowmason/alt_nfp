@@ -18,37 +18,22 @@ import warnings
 import arviz as az
 import pymc as pm
 
-# Default sampling configuration (production run)
-DEFAULT_SAMPLER_KWARGS: dict = dict(
-    draws=4000,
-    tune=3000,
-    chains=4,
-    target_accept=0.95,
-    return_inferencedata=True,
-)
+from .settings import NowcastConfig
 
-# Lighter configuration for backtest loops (~30 sec/run)
-LIGHT_SAMPLER_KWARGS: dict = dict(
-    draws=2000,
-    tune=2000,
-    chains=2,
-    target_accept=0.95,
-    return_inferencedata=True,
-)
-
-# Medium configuration for sensitivity sweeps
-MEDIUM_SAMPLER_KWARGS: dict = dict(
-    draws=4000,
-    tune=3000,
-    chains=4,
-    target_accept=0.95,
-    return_inferencedata=True,
-)
+# Legacy sampling dicts — kept for backwards compatibility during migration.
+# New code should use ``cfg.sampling.get_preset(name).to_pymc_kwargs()``.
+_DEFAULT = NowcastConfig()
+DEFAULT_SAMPLER_KWARGS: dict = _DEFAULT.sampling.default.to_pymc_kwargs()
+LIGHT_SAMPLER_KWARGS: dict = _DEFAULT.sampling.light.to_pymc_kwargs()
+MEDIUM_SAMPLER_KWARGS: dict = _DEFAULT.sampling.medium.to_pymc_kwargs()
 
 
 def sample_model(
     model: pm.Model,
     sampler_kwargs: dict | None = None,
+    *,
+    cfg: NowcastConfig | None = None,
+    preset: str | None = None,
 ) -> az.InferenceData:
     """Sample the model using nutpie (preferred) or PyMC NUTS.
 
@@ -60,9 +45,18 @@ def sample_model(
         Override the default sampling configuration.  Use
         ``LIGHT_SAMPLER_KWARGS`` for backtest loops or
         ``MEDIUM_SAMPLER_KWARGS`` for sensitivity sweeps.
+    cfg : NowcastConfig, optional
+        Pipeline configuration.  Used to look up the *preset* when
+        *sampler_kwargs* is not provided.
+    preset : str, optional
+        Sampling preset name (e.g. ``"default"``, ``"light"``,
+        ``"medium"``).  Ignored when *sampler_kwargs* is given.
     """
     if sampler_kwargs is None:
-        sampler_kwargs = DEFAULT_SAMPLER_KWARGS
+        if cfg is not None and preset is not None:
+            sampler_kwargs = cfg.sampling.get_preset(preset).to_pymc_kwargs()
+        else:
+            sampler_kwargs = DEFAULT_SAMPLER_KWARGS
 
     with model:
         warnings.filterwarnings(

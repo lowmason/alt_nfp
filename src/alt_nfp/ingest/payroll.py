@@ -70,10 +70,16 @@ def read_provider_table(fpath: Path) -> pl.DataFrame | None:
     return raw.sort("ref_date")
 
 
-def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
+def load_provider_series(
+    config: ProviderConfig,
+    *,
+    data_dir: Path | None = None,
+    store_dir: Path | None = None,
+    min_pseudo_estabs: int | None = None,
+) -> pl.DataFrame | None:
     """Load and filter a provider file to a flat time series.
 
-    Reads the file at ``DATA_DIR / config.file``, filters to the
+    Reads the file at ``data_dir / config.file``, filters to the
     geography/industry slice specified in *config*, and returns a
     DataFrame with columns ``ref_date``, ``employment``, and optionally
     ``birth_rate`` (if present in the source file).
@@ -83,7 +89,11 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
 
     Returns ``None`` if the file is missing or the filtered result is empty.
     """
-    fpath = DATA_DIR / config.file
+    _data_dir = data_dir if data_dir is not None else DATA_DIR
+    _store_dir = store_dir if store_dir is not None else STORE_DIR
+    _min_estabs = min_pseudo_estabs if min_pseudo_estabs is not None else MIN_PSEUDO_ESTABS_PER_CELL
+
+    fpath = _data_dir / config.file
     raw = read_provider_table(fpath)
     if raw is None:
         logger.warning("Provider file not found or unreadable: %s", fpath)
@@ -97,7 +107,7 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
         from .compositing import compute_provider_composite
 
         composite_df, _ = compute_provider_composite(
-            raw, STORE_DIR, MIN_PSEUDO_ESTABS_PER_CELL,
+            raw, _store_dir, _min_estabs,
         )
         if composite_df.is_empty():
             logger.warning("Compositing produced no rows for %s", fpath)
@@ -129,7 +139,7 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
 
     # Join birth rates from a separate file if configured.
     if config.birth_file is not None and "birth_rate" not in result.columns:
-        result = _join_birth_file(result, DATA_DIR / config.birth_file)
+        result = _join_birth_file(result, _data_dir / config.birth_file)
 
     return result
 
@@ -137,6 +147,10 @@ def load_provider_series(config: ProviderConfig) -> pl.DataFrame | None:
 def ingest_provider(
     config: ProviderConfig,
     raw_dir: Path | None = None,
+    *,
+    data_dir: Path | None = None,
+    store_dir: Path | None = None,
+    min_pseudo_estabs: int | None = None,
 ) -> pl.DataFrame:
     """Load a single payroll provider's data into PANEL_SCHEMA format.
 
@@ -145,14 +159,24 @@ def ingest_provider(
     config : ProviderConfig
         Provider configuration from alt_nfp.config.
     raw_dir : Path, optional
-        Directory containing raw provider files. Falls back to DATA_DIR
+        Directory containing raw provider files. Falls back to *data_dir*
         if not provided or if file not found in raw_dir.
+    data_dir : Path, optional
+        Root data directory. Defaults to ``DATA_DIR``.
+    store_dir : Path, optional
+        Vintage store directory (for compositing). Defaults to ``STORE_DIR``.
+    min_pseudo_estabs : int, optional
+        Minimum pseudo-establishments per cell. Defaults to config constant.
 
     Returns
     -------
     pl.DataFrame
         Observation panel rows conforming to PANEL_SCHEMA.
     """
+    _data_dir = data_dir if data_dir is not None else DATA_DIR
+    _store_dir = store_dir if store_dir is not None else STORE_DIR
+    _min_estabs = min_pseudo_estabs if min_pseudo_estabs is not None else MIN_PSEUDO_ESTABS_PER_CELL
+
     fpath = None
     if raw_dir is not None:
         candidate = raw_dir / config.file
@@ -160,7 +184,7 @@ def ingest_provider(
             fpath = candidate
 
     if fpath is None:
-        fpath = DATA_DIR / config.file
+        fpath = _data_dir / config.file
     raw = read_provider_table(fpath)
     if raw is None:
         logger.warning("Provider file not found or unreadable: %s", fpath)
@@ -176,7 +200,7 @@ def ingest_provider(
         from .compositing import compute_provider_composite
 
         composite_df, _ = compute_provider_composite(
-            raw, STORE_DIR, MIN_PSEUDO_ESTABS_PER_CELL,
+            raw, _store_dir, _min_estabs,
         )
         if composite_df.is_empty():
             return empty_panel()

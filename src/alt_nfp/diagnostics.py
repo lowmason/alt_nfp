@@ -18,13 +18,14 @@ import numpy as np
 import polars as pl
 
 from .config import OUTPUT_DIR, QCEW_NU
+from .settings import NowcastConfig
 
 # =========================================================================
 # Parameter summary & convergence
 # =========================================================================
 
 
-def print_diagnostics(idata: az.InferenceData, data: dict) -> None:
+def print_diagnostics(idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Print sampling diagnostics and structured parameter summary."""
     pp_data = data["pp_data"]
 
@@ -594,7 +595,7 @@ def print_provider_value_of_information(idata: az.InferenceData, data: dict) -> 
 # =========================================================================
 
 
-def plot_divergences(idata: az.InferenceData, data: dict) -> None:
+def plot_divergences(idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Bivariate scatter-plots highlighting divergent transitions."""
     diverging = idata.sample_stats.diverging.values
     n_divs = int(diverging.sum())

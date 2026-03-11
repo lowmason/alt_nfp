@@ -58,6 +58,7 @@ def read_indicator(
 
 def download_indicators(
     *,
+    indicators: list[dict] | None = None,
     start_date: str = "2000-01-01",
     api_key: str | None = None,
     store_dir: Path = INDICATORS_DIR,
@@ -66,6 +67,9 @@ def download_indicators(
 
     Parameters
     ----------
+    indicators : list[dict], optional
+        Indicator specs (each with ``name`` and ``fred_id``).
+        Defaults to ``CYCLICAL_INDICATORS``.
     start_date : str
         Observation start date (``YYYY-MM-DD``).
     api_key : str or None
@@ -78,10 +82,12 @@ def download_indicators(
     dict[str, int]
         Mapping of indicator name to row count written.
     """
+    if indicators is None:
+        indicators = CYCLICAL_INDICATORS
     store_dir.mkdir(parents=True, exist_ok=True)
     results: dict[str, int] = {}
 
-    for spec in CYCLICAL_INDICATORS:
+    for spec in indicators:
         name = spec["name"]
         fred_id = spec["fred_id"]
         logger.info("Downloading %s (%s) from FRED...", name, fred_id)

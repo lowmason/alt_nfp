@@ -25,6 +25,7 @@ from scipy import stats as sp_stats
 
 from .config import OUTPUT_DIR
 from .panel_adapter import build_obs_sources
+from .settings import NowcastConfig
 
 
 # =========================================================================
@@ -33,7 +34,7 @@ from .panel_adapter import build_obs_sources
 
 
 def run_prior_predictive_checks(
-    model: pm.Model, data: dict
+    model: pm.Model, data: dict, cfg: NowcastConfig | None = None,
 ) -> az.InferenceData | None:
     """Sample from the prior predictive and visualise.
 
@@ -112,7 +113,7 @@ def run_prior_predictive_checks(
 
 
 def run_posterior_predictive_checks(
-    model: pm.Model, idata: az.InferenceData, data: dict,
+    model: pm.Model, idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None,
 ) -> None:
     """Density overlays and test-statistics comparing replicated to observed."""
     print("Sampling posterior predictive\u2026")
@@ -289,7 +290,7 @@ def _print_loo_outliers(
           f"or ELPD_i < {threshold:+.1f})")
 
 
-def run_loo_cv(model: pm.Model, idata: az.InferenceData, data: dict) -> None:
+def run_loo_cv(model: pm.Model, idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Compute LOO-CV per source, list outliers, and visualise k-hat diagnostics.
 
     For each source, prints summary statistics and a table of flagged

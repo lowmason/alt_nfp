@@ -22,33 +22,19 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 
-from .config import (
-    CYCLICAL_INDICATORS,
-    LOG_SIGMA_BD_MU,
-    LOG_SIGMA_BD_SD,
-    LOG_SIGMA_CES_MU,
-    LOG_SIGMA_CES_SD,
-    LOG_SIGMA_FOURIER_MU,
-    LOG_SIGMA_FOURIER_SD,
-    LOG_SIGMA_QCEW_BOUNDARY_MU,
-    LOG_SIGMA_QCEW_BOUNDARY_SD,
-    LOG_SIGMA_QCEW_MID_MU,
-    LOG_SIGMA_QCEW_MID_SD,
-    LOG_TAU_MU,
-    LOG_TAU_SD,
-    N_ERAS,
-    N_HARMONICS,
-    QCEW_NU,
-)
+from .settings import NowcastConfig
 
 
-def build_model(data: dict) -> pm.Model:
+def build_model(data: dict, cfg: NowcastConfig | None = None) -> pm.Model:
     """Build the QCEW-anchored PyMC model.
 
     Parameters
     ----------
     data : dict
         Output of :func:`alt_nfp.panel_adapter.panel_to_model_data`.
+    cfg : NowcastConfig, optional
+        Pipeline configuration.  Defaults to ``NowcastConfig()`` (legacy
+        hard-coded values).
 
     Key changes from v2
     --------------------
@@ -59,6 +45,9 @@ def build_model(data: dict) -> pm.Model:
     * QCEW observation noise: two estimated base sigmas (M2 vs M3+M1)
       times per-observation revision multiplier from ``data['qcew_noise_mult']``.
     """
+    if cfg is None:
+        cfg = NowcastConfig()
+
     T = data["T"]
     month_of_year = data["month_of_year"]
     pp_data = data["pp_data"]
@@ -72,13 +61,13 @@ def build_model(data: dict) -> pm.Model:
         # =============================================================
         sigma_qcew_mid = pm.LogNormal(
             "sigma_qcew_mid",
-            mu=LOG_SIGMA_QCEW_MID_MU,
-            sigma=LOG_SIGMA_QCEW_MID_SD,
+            mu=cfg.model.qcew.log_sigma_mid_mu,
+            sigma=cfg.model.qcew.log_sigma_mid_sd,
         )
         sigma_qcew_boundary = pm.LogNormal(
             "sigma_qcew_boundary",
-            mu=LOG_SIGMA_QCEW_BOUNDARY_MU,
-            sigma=LOG_SIGMA_QCEW_BOUNDARY_SD,
+            mu=cfg.model.qcew.log_sigma_boundary_mu,
+            sigma=cfg.model.qcew.log_sigma_boundary_sd,
         )
         qcew_is_m2 = pt.as_tensor_variable(
             np.asarray(data["qcew_is_m2"], dtype=bool)
@@ -99,14 +88,14 @@ def build_model(data: dict) -> pm.Model:
         # Marginal SD of the AR(1) process.  Reparameterising as tau
         # (stationary SD) rather than the innovation SD sigma_g breaks
         # the phi-sigma ridge that causes low ESS.
-        tau = pm.LogNormal("tau", mu=LOG_TAU_MU, sigma=LOG_TAU_SD)
+        tau = pm.LogNormal("tau", mu=cfg.model.latent.log_tau_mu, sigma=cfg.model.latent.log_tau_sd)
         phi_raw = pm.Beta("phi_raw", alpha=18, beta=2)
         phi = pt.minimum(phi_raw, 0.99)
         sigma_g = tau * pt.sqrt(1 - phi**2)
         eps_g = pm.Normal("eps_g", 0, 1, shape=T)
 
         if era_idx is not None:
-            mu_g_era = pm.Normal("mu_g_era", mu=0.001, sigma=0.005, shape=N_ERAS)
+            mu_g_era = pm.Normal("mu_g_era", mu=0.001, sigma=0.005, shape=cfg.model.eras.n_eras)
             mu_g = mu_g_era[era_idx]       # (T,)
 
             g0 = mu_g[0] + sigma_g * eps_g[0]
@@ -149,17 +138,17 @@ def build_model(data: dict) -> pm.Model:
         # A_k, B_k evolve as Gaussian random walks across years.
         # =============================================================
 
-        K = N_HARMONICS
+        K = cfg.model.fourier.n_harmonics
         n_years = data['n_years']
         year_of_obs = data['year_of_obs']
 
         # Innovation std per harmonic (decreasing with k in log-space).
         # LogNormal avoids the zero-boundary pathology of HalfNormal.
-        sigma_fourier_mu = LOG_SIGMA_FOURIER_MU - np.log(np.arange(1, K + 1))
+        sigma_fourier_mu = cfg.model.fourier.log_sigma_mu - np.log(np.arange(1, K + 1))
         sigma_fourier = pm.LogNormal(
             'sigma_fourier',
             mu=sigma_fourier_mu,
-            sigma=LOG_SIGMA_FOURIER_SD,
+            sigma=cfg.model.fourier.log_sigma_sd,
             shape=K,
         )
 
@@ -199,14 +188,14 @@ def build_model(data: dict) -> pm.Model:
         # =============================================================
 
         phi_0 = pm.Normal("phi_0", mu=0.001, sigma=0.002)
-        sigma_bd = pm.LogNormal("sigma_bd", mu=LOG_SIGMA_BD_MU, sigma=LOG_SIGMA_BD_SD)
+        sigma_bd = pm.LogNormal("sigma_bd", mu=cfg.model.birth_death.log_sigma_mu, sigma=cfg.model.birth_death.log_sigma_sd)
 
         xi_bd = pm.Normal("xi_bd", 0, 1, shape=T)
 
         bd_t = phi_0 + sigma_bd * xi_bd
 
         # Cyclical indicators (demand-side BD covariates)
-        cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]
+        cyclical_keys = [f"{ind.name}_c" for ind in cfg.indicators]
         cyclical_data = []
         cyclical_names = []
         for key in cyclical_keys:
@@ -240,7 +229,7 @@ def build_model(data: dict) -> pm.Model:
 
         pm.StudentT(
             "obs_qcew",
-            nu=QCEW_NU,
+            nu=cfg.model.qcew.nu,
             mu=g_total_nsa[data["qcew_obs"]],
             sigma=qcew_sigma,
             observed=data["g_qcew"][data["qcew_obs"]],
@@ -259,11 +248,11 @@ def build_model(data: dict) -> pm.Model:
         )
         n_ces_v = data["n_ces_vintages"]
         sigma_ces_sa = pm.LogNormal(
-            "sigma_ces_sa", mu=LOG_SIGMA_CES_MU, sigma=LOG_SIGMA_CES_SD,
+            "sigma_ces_sa", mu=cfg.model.ces.log_sigma_mu, sigma=cfg.model.ces.log_sigma_sd,
             shape=n_ces_v,
         )
         sigma_ces_nsa = pm.LogNormal(
-            "sigma_ces_nsa", mu=LOG_SIGMA_CES_MU, sigma=LOG_SIGMA_CES_SD,
+            "sigma_ces_nsa", mu=cfg.model.ces.log_sigma_mu, sigma=cfg.model.ces.log_sigma_sd,
             shape=n_ces_v,
         )
 
@@ -293,8 +282,8 @@ def build_model(data: dict) -> pm.Model:
         # =============================================================
 
         for pp in pp_data:
-            cfg = pp["config"]
-            name = cfg.name.lower()
+            pp_cfg = pp["config"]
+            name = pp_cfg.name.lower()
             obs_idx = pp["pp_obs"]
             y_obs = pp["g_pp"][obs_idx]
             if len(obs_idx) == 0:
@@ -307,7 +296,7 @@ def build_model(data: dict) -> pm.Model:
 
             mu_base = alpha_p + lam_p * g_cont_nsa[obs_idx]
 
-            if cfg.error_model == "ar1":
+            if pp_cfg.error_model == "ar1":
                 # AR(1) measurement error (e.g. multi-establishment restructuring)
                 rho_p = pm.Beta(f"rho_{name}", alpha=2, beta=3)
 
@@ -326,7 +315,7 @@ def build_model(data: dict) -> pm.Model:
                 )
                 pm.Normal(f"obs_{name}", mu=mu_cond, sigma=sigma_cond, observed=y_obs)
 
-            elif cfg.error_model == "iid":
+            elif pp_cfg.error_model == "iid":
                 pm.Normal(f"obs_{name}", mu=mu_base, sigma=sigma_p, observed=y_obs)
 
     return model

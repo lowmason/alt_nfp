@@ -21,12 +21,13 @@ from .benchmark import (
     extract_benchmark_revision,
     summarize_revision_posterior,
 )
-from .config import OUTPUT_DIR, PROVIDERS
+from .config import BASE_DIR, providers_from_settings
 from .ingest import build_panel
 from .lookups.benchmark_revisions import BENCHMARK_REVISIONS
 from .model import build_model
 from .panel_adapter import panel_to_model_data
-from .sampling import LIGHT_SAMPLER_KWARGS, sample_model
+from .sampling import sample_model
+from .settings import NowcastConfig
 
 # ── Year sets ────────────────────────────────────────────────────────────
 
@@ -106,6 +107,7 @@ def run_benchmark_backtest(
     checkpoint_dir: Path | None = None,
     *,
     use_era_specific: bool = True,
+    cfg: NowcastConfig | None = None,
 ) -> pl.DataFrame:
     """Run the benchmark revision backtest.
 
@@ -141,12 +143,16 @@ def run_benchmark_backtest(
         One row per ``(year, horizon)`` with posterior summary statistics,
         actual revision, and error.
     """
+    if cfg is None:
+        cfg = NowcastConfig()
+    providers = providers_from_settings(cfg)
+
     if years is None:
         years = DEFAULT_YEARS
     if horizons is None:
         horizons = HORIZONS
     if sampler_kwargs is None:
-        sampler_kwargs = LIGHT_SAMPLER_KWARGS
+        sampler_kwargs = cfg.sampling.get_preset(cfg.backtest.sampling_preset).to_pymc_kwargs()
 
     ckpt_path = (
         checkpoint_dir / "benchmark_backtest_checkpoint.parquet"
@@ -161,7 +167,7 @@ def run_benchmark_backtest(
 
     # Pre-compute anchor levels from the UNCENSORED panel so that
     # as_of censoring doesn't hide the March Y-1 employment level.
-    uncensored_data = panel_to_model_data(panel, PROVIDERS, industry_code="00")
+    uncensored_data = panel_to_model_data(panel, providers, industry_code="00", cfg=cfg)
     anchor_levels: dict[int, float | None] = {}
     for y in years:
         try:
@@ -195,7 +201,7 @@ def run_benchmark_backtest(
             )
 
             data = panel_to_model_data(
-                panel, PROVIDERS, as_of=as_of, industry_code="00",
+                panel, providers, as_of=as_of, industry_code="00", cfg=cfg,
             )
             try:
                 _find_benchmark_window(data["dates"], march_year)
@@ -209,8 +215,8 @@ def run_benchmark_backtest(
             if not use_era_specific and "era_idx" in data:
                 data = {k: v for k, v in data.items() if k != "era_idx"}
 
-            model = build_model(data)
-            idata = sample_model(model, sampler_kwargs=sampler_kwargs)
+            model = build_model(data, cfg=cfg)
+            idata = sample_model(model, sampler_kwargs=sampler_kwargs, cfg=cfg)
 
             samples = extract_benchmark_revision(
                 idata, data, march_year, anchor_level=anchor_levels.get(march_year),

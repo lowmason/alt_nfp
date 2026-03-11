@@ -29,7 +29,9 @@ from .config import (
     PROVIDERS,
     STORE_DIR,
     ProviderConfig,
+    providers_from_settings,
 )
+from .settings import NowcastConfig, load_config, save_config
 from .model import build_model
 from .panel_adapter import build_obs_sources, panel_to_model_data
 from .sampling import (
@@ -68,6 +70,10 @@ __all__ = [
     "STORE_DIR",
     "PROVIDERS",
     "ProviderConfig",
+    "providers_from_settings",
+    "NowcastConfig",
+    "load_config",
+    "save_config",
     "build_obs_sources",
     "build_model",
     "sample_model",

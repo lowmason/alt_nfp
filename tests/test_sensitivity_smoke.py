@@ -9,6 +9,7 @@ config structure is valid.
 from __future__ import annotations
 
 from alt_nfp.sensitivity import QCEW_SIGMA_CONFIGS, _build_param_specs
+from alt_nfp.settings import NowcastConfig
 
 
 class TestSensitivityConfig:
@@ -45,7 +46,7 @@ class TestBuildParamSpecs:
             "claims_c": np.zeros(10),
             "jolts_c": np.zeros(10),
         }
-        specs = _build_param_specs(data)
+        specs = _build_param_specs(data, NowcastConfig())
         assert len(specs) > 0
         names = [s[0] for s in specs]
         assert any("ces" in n.lower() for n in names)
@@ -59,7 +60,7 @@ class TestBuildParamSpecs:
             "claims_c": np.ones(10),
             "jolts_c": np.ones(10),
         }
-        specs = _build_param_specs(data)
+        specs = _build_param_specs(data, NowcastConfig())
         names = [s[0] for s in specs]
         phi3_entries = [n for n in names if "φ_3" in n]
         assert len(phi3_entries) == 2

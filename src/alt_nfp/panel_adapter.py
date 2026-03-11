@@ -13,35 +13,18 @@ from datetime import date, timedelta
 import numpy as np
 import polars as pl
 
-from .config import (
-    BD_QCEW_LAG,
-    CYCLICAL_INDICATORS,
-    DATA_DIR,
-    ERA_BREAKS,
-    INDICATORS_DIR,
-    PP_COLORS,
-    QCEW_POST_COVID_BOUNDARY_ERA_DEFAULT,
-    QCEW_POST_COVID_BOUNDARY_ERA_MULT,
-    ProviderConfig,
-)
+from .config import PP_COLORS, ProviderConfig
 from .ingest.payroll import load_provider_series
 from .lookups.revision_schedules import get_noise_multiplier
-
-# Provider data is typically available ~3 weeks after the reference period.
-_PROVIDER_PUBLICATION_LAG_WEEKS = 3
-
-_CYCLICAL_PUBLICATION_LAGS: dict[str, int] = {
-    "claims": 1,      # Weekly initial jobless claims — ~1 week lag, rounded to 1 month
-    "jolts": 2,        # BLS JOLTS job openings — ~2 month lag
-}
+from .settings import NowcastConfig
 
 
-def _date_to_era(d: date) -> int:
-    """Map a date to its era index using :data:`ERA_BREAKS`."""
-    for i, brk in enumerate(ERA_BREAKS):
+def _date_to_era(d: date, breaks: list[date]) -> int:
+    """Map a date to its era index using the given era breaks."""
+    for i, brk in enumerate(breaks):
         if d < brk:
             return i
-    return len(ERA_BREAKS)
+    return len(breaks)
 
 
 def _offset_month(d: date, months: int) -> date:
@@ -60,6 +43,7 @@ def panel_to_model_data(
     *,
     geographic_code: str = "US",
     industry_code: str = "00",
+    cfg: NowcastConfig | None = None,
 ) -> dict:
     """Convert an observation panel to the model data dict.
 
@@ -90,6 +74,20 @@ def panel_to_model_data(
         Dict consumed by :func:`alt_nfp.model.build_model` and downstream
         diagnostics/plotting functions.
     """
+    if cfg is None:
+        cfg = NowcastConfig()
+
+    era_breaks = [b for b in cfg.model.eras.breaks]
+    bd_qcew_lag = cfg.model.birth_death.qcew_lag
+    indicators = cfg.indicators
+    publication_lags = {ind.name: ind.pub_lag for ind in indicators}
+    provider_pub_lag_weeks = cfg.publication_lags.provider_weeks
+    qcew_pcb_mult, qcew_pcb_default = cfg.model.qcew.post_covid_boundary_mult.as_dict()
+    resolved = cfg.resolve_paths(
+        __import__("pathlib").Path(__file__).resolve().parents[2]
+    )
+    indicators_dir = resolved.indicators_dir
+
     if as_of is not None and "vintage_date" in panel.columns:
         panel = panel.filter(
             pl.col("vintage_date").is_null() | (pl.col("vintage_date") <= as_of)
@@ -119,7 +117,7 @@ def panel_to_model_data(
     year0 = dates[0].year
     year_of_obs = np.array([d.year - year0 for d in dates], dtype=int)
     n_years = int(year_of_obs.max()) + 1
-    era_idx = np.array([_date_to_era(d) for d in dates], dtype=int)
+    era_idx = np.array([_date_to_era(d, era_breaks) for d in dates], dtype=int)
 
     # Helper: one T-length array per source, filled from panel (final vintage per period)
     def _growth_series(source: str) -> np.ndarray:
@@ -194,11 +192,9 @@ def panel_to_model_data(
     for j, i in enumerate(qcew_obs):
         if qcew_is_m2[j]:
             continue
-        if _date_to_era(dates[i]) >= 1:  # Post-COVID
+        if _date_to_era(dates[i], era_breaks) >= 1:  # Post-COVID
             rev = int(qcew_period_to_revision.get(dates[i], 0))
-            era_mult = QCEW_POST_COVID_BOUNDARY_ERA_MULT.get(
-                rev, QCEW_POST_COVID_BOUNDARY_ERA_DEFAULT
-            )
+            era_mult = qcew_pcb_mult.get(rev, qcew_pcb_default)
             qcew_noise_mult[j] *= era_mult
 
     # CES best-available: one obs per month using the latest print.
@@ -290,7 +286,7 @@ def panel_to_model_data(
             # Censor birth rate data not yet published as of the as_of date.
             # Provider data is available ~3 weeks after the reference period.
             if as_of is not None:
-                lag = timedelta(weeks=_PROVIDER_PUBLICATION_LAG_WEEKS)
+                lag = timedelta(weeks=provider_pub_lag_weeks)
                 for i, d in enumerate(dates):
                     if d + lag > as_of:
                         births_arr[i:] = np.nan
@@ -321,18 +317,18 @@ def panel_to_model_data(
         g_pp_avg = np.full(T, np.nan)
     bd_proxy = g_qcew - g_pp_avg
     bd_qcew_lagged = np.full(T, np.nan)
-    for t in range(BD_QCEW_LAG, T):
-        if np.isfinite(bd_proxy[t - BD_QCEW_LAG]):
-            bd_qcew_lagged[t] = bd_proxy[t - BD_QCEW_LAG]
-    cyclical = _load_cyclical_indicators(dates, T)
+    for t in range(bd_qcew_lag, T):
+        if np.isfinite(bd_proxy[t - bd_qcew_lag]):
+            bd_qcew_lagged[t] = bd_proxy[t - bd_qcew_lag]
+    cyclical = _load_cyclical_indicators(dates, T, indicators, indicators_dir)
 
     if as_of is not None:
-        for spec in CYCLICAL_INDICATORS:
-            key = f"{spec['name']}_c"
+        for ind in indicators:
+            key = f"{ind.name}_c"
             arr = cyclical.get(key)
             if arr is None:
                 continue
-            lag = _CYCLICAL_PUBLICATION_LAGS.get(spec["name"], 1)
+            lag = publication_lags.get(ind.name, 1)
             for i, d in enumerate(dates):
                 if _offset_month(d, lag) > as_of:
                     arr[i:] = 0.0
@@ -388,10 +384,10 @@ def panel_to_model_data(
         f"  BD covariates: birth_rate {n_birth} obs "
         f"(mean={_br_mean * 100:.3f}%), "
         f"bd_qcew_lagged {n_bd_qcew} obs "
-        f"(L={BD_QCEW_LAG}mo, mean={_bq_mean * 100:.4f}%)"
+        f"(L={bd_qcew_lag}mo, mean={_bq_mean * 100:.4f}%)"
     )
-    for spec in CYCLICAL_INDICATORS:
-        key = f"{spec['name']}_c"
+    for ind in indicators:
+        key = f"{ind.name}_c"
         arr = cyclical.get(key)
         if arr is not None:
             n_nonzero = int(np.sum(arr != 0.0))
@@ -455,7 +451,7 @@ def build_obs_sources(data: dict) -> dict:
     return sources
 
 
-def _load_cyclical_indicators(dates: list, T: int) -> dict:
+def _load_cyclical_indicators(dates: list, T: int, indicators=None, indicators_dir=None) -> dict:
     """Load cyclical indicators from parquet, align to model dates, and centre.
 
     Reads from ``data/indicators/<name>.parquet`` (schema: ``ref_date``,
@@ -467,11 +463,17 @@ def _load_cyclical_indicators(dates: list, T: int) -> dict:
     length *T*.  Missing files are gracefully skipped (value set to
     ``None``).
     """
+    if indicators is None:
+        from .config import CYCLICAL_INDICATORS
+        indicators = [type("_S", (), {"name": s["name"], "freq": s["freq"]})() for s in CYCLICAL_INDICATORS]
+    if indicators_dir is None:
+        from .config import INDICATORS_DIR
+        indicators_dir = INDICATORS_DIR
     result: dict = {}
 
-    for spec in CYCLICAL_INDICATORS:
-        key = f"{spec['name']}_c"
-        fpath = INDICATORS_DIR / f"{spec['name']}.parquet"
+    for spec in indicators:
+        key = f"{spec.name}_c"
+        fpath = indicators_dir / f"{spec.name}.parquet"
 
         if not fpath.exists():
             result[key] = None
@@ -487,7 +489,7 @@ def _load_cyclical_indicators(dates: list, T: int) -> dict:
             result[key] = None
             continue
 
-        if spec['freq'] == 'weekly':
+        if spec.freq == 'weekly':
             raw = raw.with_columns(
                 pl.col('ref_date').dt.truncate('1mo').alias('month')
             )

@@ -19,9 +19,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .config import OUTPUT_DIR
+from .settings import NowcastConfig
 
 
-def plot_residuals(idata: az.InferenceData, data: dict) -> None:
+def plot_residuals(idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Plot standardised residuals per data source over time.
 
     Residuals should be approximately iid N(0,1) if the model is

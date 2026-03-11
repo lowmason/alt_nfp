@@ -16,22 +16,18 @@ Outputs include a grouped bar-chart comparing parameters across configs.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from . import config as _config
-from .config import (
-    LOG_SIGMA_QCEW_BOUNDARY_MU,
-    LOG_SIGMA_QCEW_MID_MU,
-    OUTPUT_DIR,
-    PROVIDERS,
-)
+from .config import BASE_DIR, providers_from_settings
 from .diagnostics import _qcew_precision_by_tier, print_source_contributions
 from .ingest import build_panel
 from .model import build_model
 from .panel_adapter import panel_to_model_data
-from .sampling import MEDIUM_SAMPLER_KWARGS, sample_model
+from .sampling import sample_model
+from .settings import NowcastConfig, build_sensitivity_configs
 
 # Configs: (label, scale_mid, scale_boundary)
 # Scaling shifts the LogNormal log-mu by log(scale), so "2x" doubles the
@@ -45,6 +41,7 @@ QCEW_SIGMA_CONFIGS: list[tuple[str, float, float]] = [
 
 def run_sensitivity(
     configs: list[tuple[str, float, float]] | None = None,
+    cfg: NowcastConfig | None = None,
 ) -> list[dict]:
     """Run QCEW prior-scale sensitivity sweep.
 
@@ -54,67 +51,65 @@ def run_sensitivity(
         Override the default 0.5x / 1x / 2x grid.  Each scale factor shifts
         the LogNormal log-mu by ``log(scale)``, effectively multiplying the
         prior center for sigma_qcew by ``scale``.
+    cfg : NowcastConfig, optional
+        Pipeline config.  Defaults to ``NowcastConfig()``.
 
     Returns
     -------
     list[dict]
         Per-config result records with parameter summaries and precision shares.
     """
+    if cfg is None:
+        cfg = NowcastConfig()
     if configs is None:
         configs = QCEW_SIGMA_CONFIGS
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    resolved = cfg.resolve_paths(BASE_DIR)
+    output_dir = resolved.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    providers = providers_from_settings(cfg)
+    sampler_kwargs = cfg.sampling.get_preset("medium").to_pymc_kwargs()
 
     print("Loading data\u2026")
     panel = build_panel()
-    data = panel_to_model_data(panel, PROVIDERS)
+    data = panel_to_model_data(panel, providers, cfg=cfg)
     print()
 
-    param_specs = _build_param_specs(data)
+    param_specs = _build_param_specs(data, cfg)
 
-    orig_mid_mu = _config.LOG_SIGMA_QCEW_MID_MU
-    orig_boundary_mu = _config.LOG_SIGMA_QCEW_BOUNDARY_MU
+    variant_configs = build_sensitivity_configs(cfg, configs)
     results: list[dict] = []
 
-    try:
-        for label, scale_mid, scale_boundary in configs:
-            print(
-                f"Running config: {label} "
-                f"(prior scale mid={scale_mid}, boundary={scale_boundary})\u2026"
+    for label, variant_cfg in variant_configs:
+        print(f"Running config: {label}\u2026")
+        model = build_model(data, cfg=variant_cfg)
+        idata = sample_model(model, sampler_kwargs=sampler_kwargs)
+
+        row: dict = {"config": label}
+        post = idata.posterior
+
+        for pname, key, idx, scale, _ in param_specs:
+            vals = post[key].values
+            if idx is not None:
+                vals = vals[:, :, idx]
+            v = vals.flatten()
+            row[pname] = (
+                v.mean() * scale,
+                float(np.percentile(v, 10)) * scale,
+                float(np.percentile(v, 90)) * scale,
             )
-            _config.LOG_SIGMA_QCEW_MID_MU = orig_mid_mu + math.log(scale_mid)
-            _config.LOG_SIGMA_QCEW_BOUNDARY_MU = orig_boundary_mu + math.log(scale_boundary)
-            model = build_model(data)
-            idata = sample_model(model, sampler_kwargs=MEDIUM_SAMPLER_KWARGS)
 
-            row: dict = {"config": label}
-            post = idata.posterior
+        shares = _precision_shares(idata, data)
+        row["precision_shares"] = shares
+        results.append(row)
 
-            for pname, key, idx, scale, _ in param_specs:
-                vals = post[key].values
-                if idx is not None:
-                    vals = vals[:, :, idx]
-                v = vals.flatten()
-                row[pname] = (
-                    v.mean() * scale,
-                    float(np.percentile(v, 10)) * scale,
-                    float(np.percentile(v, 90)) * scale,
-                )
-
-            shares = _precision_shares(idata, data)
-            row["precision_shares"] = shares
-            results.append(row)
-
-            print_source_contributions(idata, data)
-            print(f"  Done.\n")
-    finally:
-        _config.LOG_SIGMA_QCEW_MID_MU = orig_mid_mu
-        _config.LOG_SIGMA_QCEW_BOUNDARY_MU = orig_boundary_mu
+        print_source_contributions(idata, data)
+        print(f"  Done.\n")
 
     _print_comparison_table(results, param_specs, configs)
     _print_precision_table(results)
     _print_verdict(results)
-    _plot_sensitivity(results, param_specs, configs)
+    _plot_sensitivity(results, param_specs, configs, output_dir)
 
     return results
 
@@ -124,7 +119,9 @@ def run_sensitivity(
 # =========================================================================
 
 
-def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, str]]:
+def _build_param_specs(
+    data: dict, cfg: NowcastConfig,
+) -> list[tuple[str, str, int | None, float, str]]:
     """Build (display_name, key, index, scale, fmt) for each parameter."""
     specs: list[tuple[str, str, int | None, float, str]] = [
         ("\u03b1_ces (%/mo)", "alpha_ces", None, 100, ".4f"),
@@ -142,10 +139,8 @@ def _build_param_specs(data: dict) -> list[tuple[str, str, int | None, float, st
     specs.append(("\u03c6_0 BD (%/mo)", "phi_0", None, 100, ".4f"))
     specs.append(("\u03c3_bd (%)", "sigma_bd", None, 100, ".4f"))
     # Cyclical indicator loadings (phi_3) if available
-    from .config import CYCLICAL_INDICATORS
-
-    cyclical_labels = [spec['name'] for spec in CYCLICAL_INDICATORS]
-    cyclical_keys = [f"{spec['name']}_c" for spec in CYCLICAL_INDICATORS]
+    cyclical_labels = [ind.name for ind in cfg.indicators]
+    cyclical_keys = [f"{ind.name}_c" for ind in cfg.indicators]
     n_cyc = sum(
         1 for k in cyclical_keys
         if data.get(k) is not None and np.any(data[k] != 0.0)
@@ -272,7 +267,7 @@ def _print_verdict(results) -> None:
             )
 
 
-def _plot_sensitivity(results, param_specs, configs) -> None:
+def _plot_sensitivity(results, param_specs, configs, output_dir: Path) -> None:
     # Select a subset of parameters for the bar chart
     plot_keys = [
         "\u03b1_ces (%/mo)", "\u03bb_ces",
@@ -318,6 +313,6 @@ def _plot_sensitivity(results, param_specs, configs) -> None:
     ax.axhline(0, color="k", lw=0.5, ls="--")
     ax.set_title("QCEW Sigma Sensitivity: Key Parameters by Configuration")
     plt.tight_layout()
-    fig.savefig(OUTPUT_DIR / "sensitivity_qcew_sigma.png", dpi=150, bbox_inches="tight")
+    fig.savefig(output_dir / "sensitivity_qcew_sigma.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"\nSaved: {OUTPUT_DIR / 'sensitivity_qcew_sigma.png'}")
+    print(f"\nSaved: {output_dir / 'sensitivity_qcew_sigma.png'}")

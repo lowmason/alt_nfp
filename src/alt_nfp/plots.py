@@ -21,6 +21,7 @@ import numpy as np
 import polars as pl
 
 from .config import N_HARMONICS, OUTPUT_DIR
+from .settings import NowcastConfig
 
 
 # =========================================================================
@@ -28,7 +29,7 @@ from .config import N_HARMONICS, OUTPUT_DIR
 # =========================================================================
 
 
-def plot_growth_and_seasonal(idata: az.InferenceData, data: dict) -> None:
+def plot_growth_and_seasonal(idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Latent growth rates vs observed data and seasonal pattern."""
     dates = data["dates"]
     g_ces_sa = data["g_ces_sa"]
@@ -167,7 +168,7 @@ def plot_growth_and_seasonal(idata: az.InferenceData, data: dict) -> None:
 # =========================================================================
 
 
-def plot_reconstructed_index(idata: az.InferenceData, data: dict) -> None:
+def plot_reconstructed_index(idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Reconstructed SA/NSA index vs observed series."""
     dates = data["dates"]
     levels = data["levels"]
@@ -229,7 +230,7 @@ def plot_reconstructed_index(idata: az.InferenceData, data: dict) -> None:
 # =========================================================================
 
 
-def plot_bd_diagnostics(idata: az.InferenceData, data: dict) -> None:
+def plot_bd_diagnostics(idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None) -> None:
     """Time-series of structural BD, covariate relationships, and decomposition."""
     dates = data["dates"]
     bd_post = idata.posterior["bd"].values  # (chains, draws, T)

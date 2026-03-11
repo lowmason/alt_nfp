@@ -19,11 +19,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import N_HARMONICS, OUTPUT_DIR
+from .settings import NowcastConfig
 
 
-def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
-    """Forecast SA and NSA indices to 2026-01-12 and plot."""
+def forecast_and_plot(
+    idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None,
+) -> None:
+    """Forecast SA and NSA indices and plot."""
+    if cfg is None:
+        cfg = NowcastConfig()
+
+    _resolved = cfg.resolve_paths(
+        __import__("pathlib").Path(__file__).resolve().parents[2]
+    )
+    OUTPUT_DIR = _resolved.output_dir
+    N_HARMONICS = cfg.model.fourier.n_harmonics
+    forecast_end = cfg.forecast.end_date
+
     dates = data["dates"]
     levels = data["levels"]
     pp_data = data["pp_data"]
@@ -49,8 +61,6 @@ def forecast_and_plot(idata: az.InferenceData, data: dict) -> None:
 
     # --- Build forecast date grid ---
     last_date = dates[-1]
-    forecast_end = date(2026, 1, 12)
-
     forecast_dates: list[date] = []
     d = last_date
     while True:

@@ -25,11 +25,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import OUTPUT_DIR, PROVIDERS
+from .config import BASE_DIR, providers_from_settings
 from .ingest import build_panel
 from .model import build_model
 from .panel_adapter import panel_to_model_data
-from .sampling import LIGHT_SAMPLER_KWARGS, sample_model
+from .sampling import sample_model
+from .settings import NowcastConfig
 
 
 # =========================================================================
@@ -114,13 +115,13 @@ def _print_frontier(frontier: dict, target_date: date) -> None:
 # =========================================================================
 
 
-def _resolve_run_dir(output_dir: Path | None) -> Path:
+def _resolve_run_dir(output_dir: Path | None, default_output_dir: Path) -> Path:
     """Return the run directory, creating it if needed."""
     if output_dir is not None:
         run_dir = output_dir
     else:
         ts = datetime.now().strftime("%Y-%m-%dT%H-%M")
-        run_dir = OUTPUT_DIR / "backtest_runs" / ts
+        run_dir = default_output_dir / "backtest_runs" / ts
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 
@@ -131,6 +132,7 @@ def run_backtest(
     start_date: date | None = None,
     output_dir: Path | None = None,
     use_era_specific: bool = True,
+    cfg: NowcastConfig | None = None,
 ) -> pl.DataFrame:
     """Run the real-time nowcast backtest.
 
@@ -167,12 +169,18 @@ def run_backtest(
     pl.DataFrame
         Per-month result records with actual vs nowcast metrics.
     """
-    run_dir = _resolve_run_dir(output_dir)
+    if cfg is None:
+        cfg = NowcastConfig()
+    resolved = cfg.resolve_paths(BASE_DIR)
+    providers = providers_from_settings(cfg)
+    sampler_kwargs = cfg.sampling.get_preset(cfg.backtest.sampling_preset).to_pymc_kwargs()
+
+    run_dir = _resolve_run_dir(output_dir, resolved.output_dir)
 
     panel_full = build_panel()
 
     # Uncensored "truth" panel for actual values
-    data_full = panel_to_model_data(panel_full, PROVIDERS)
+    data_full = panel_to_model_data(panel_full, providers, cfg=cfg)
 
     dates = data_full["dates"]
     T = len(dates)
@@ -211,14 +219,14 @@ def run_backtest(
         print(f"\n--- Nowcast backtest {run + 1}/{n_runs}: {target_date} ---")
 
         panel = build_panel(as_of_ref=target_date)
-        data = panel_to_model_data(panel, PROVIDERS, as_of=target_date)
+        data = panel_to_model_data(panel, providers, as_of=target_date, cfg=cfg)
         frontier = _vintage_frontier(data)
         _print_frontier(frontier, target_date)
 
         if not use_era_specific and "era_idx" in data:
             data = {k: v for k, v in data.items() if k != "era_idx"}
-        model = build_model(data)
-        idata = sample_model(model, sampler_kwargs=LIGHT_SAMPLER_KWARGS)
+        model = build_model(data, cfg=cfg)
+        idata = sample_model(model, sampler_kwargs=sampler_kwargs)
 
         # Persist InferenceData for later analysis
         nc_path = run_dir / f"{target_date:%Y-%m}.nc"

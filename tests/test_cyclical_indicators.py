@@ -18,10 +18,14 @@ import pytest
 
 from alt_nfp.config import CYCLICAL_INDICATORS, INDICATORS_DIR
 from alt_nfp.panel_adapter import (
-    _CYCLICAL_PUBLICATION_LAGS,
     _load_cyclical_indicators,
     _offset_month,
 )
+from alt_nfp.settings import NowcastConfig
+
+# Publication lags now live in NowcastConfig.indicators[i].pub_lag
+_cfg = NowcastConfig()
+_CYCLICAL_PUBLICATION_LAGS = {ind.name: ind.pub_lag for ind in _cfg.indicators}
 
 
 class TestCyclicalIndicatorsConfig:
@@ -94,14 +98,13 @@ class TestLoadCyclicalIndicators:
         df.write_parquet(indicators_dir / f"{name}.parquet")
         return df
 
-    def test_loads_monthly_parquet(self, tmp_path, monkeypatch):
+    def test_loads_monthly_parquet(self, tmp_path):
         """Monthly parquet should load and center correctly."""
         ind_dir = tmp_path / "indicators"
         self._write_monthly_parquet(ind_dir, "jolts")
-        monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
         dates = [date(2020 + (i // 12), (i % 12) + 1, 1) for i in range(60)]
-        result = _load_cyclical_indicators(dates, len(dates))
+        result = _load_cyclical_indicators(dates, len(dates), indicators_dir=ind_dir)
 
         assert "jolts_c" in result
         arr = result["jolts_c"]
@@ -111,56 +114,52 @@ class TestLoadCyclicalIndicators:
         if len(nonzero) > 0:
             assert abs(nonzero.mean()) < 1.0
 
-    def test_loads_weekly_parquet(self, tmp_path, monkeypatch):
+    def test_loads_weekly_parquet(self, tmp_path):
         """Weekly parquet should be aggregated to monthly and centered."""
         ind_dir = tmp_path / "indicators"
         self._write_weekly_parquet(ind_dir, "claims")
-        monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
         dates = [date(2020 + (i // 12), (i % 12) + 1, 1) for i in range(60)]
-        result = _load_cyclical_indicators(dates, len(dates))
+        result = _load_cyclical_indicators(dates, len(dates), indicators_dir=ind_dir)
 
         assert "claims_c" in result
         arr = result["claims_c"]
         assert arr is not None
         assert arr.shape == (60,)
 
-    def test_missing_file_returns_none(self, tmp_path, monkeypatch):
+    def test_missing_file_returns_none(self, tmp_path):
         """Missing parquet should set indicator to None."""
         ind_dir = tmp_path / "indicators"
         ind_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
         dates = [date(2020 + (i // 12), (i % 12) + 1, 1) for i in range(24)]
-        result = _load_cyclical_indicators(dates, len(dates))
+        result = _load_cyclical_indicators(dates, len(dates), indicators_dir=ind_dir)
 
         for spec in CYCLICAL_INDICATORS:
             key = f"{spec['name']}_c"
             assert result[key] is None
 
-    def test_jolts_loads_correctly(self, tmp_path, monkeypatch):
+    def test_jolts_loads_correctly(self, tmp_path):
         """JOLTS parquet should load as monthly data."""
         ind_dir = tmp_path / "indicators"
         self._write_monthly_parquet(ind_dir, "jolts")
-        monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
         dates = [date(2020 + (i // 12), (i % 12) + 1, 1) for i in range(60)]
-        result = _load_cyclical_indicators(dates, len(dates))
+        result = _load_cyclical_indicators(dates, len(dates), indicators_dir=ind_dir)
 
         assert "jolts_c" in result
         arr = result["jolts_c"]
         assert arr is not None
         assert arr.shape == (60,)
 
-    def test_all_indicators_load(self, tmp_path, monkeypatch):
+    def test_all_indicators_load(self, tmp_path):
         """All configured indicators should load when all files present."""
         ind_dir = tmp_path / "indicators"
         self._write_weekly_parquet(ind_dir, "claims")
         self._write_monthly_parquet(ind_dir, "jolts")
-        monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
 
         dates = [date(2020 + (i // 12), (i % 12) + 1, 1) for i in range(60)]
-        result = _load_cyclical_indicators(dates, len(dates))
+        result = _load_cyclical_indicators(dates, len(dates), indicators_dir=ind_dir)
 
         for spec in CYCLICAL_INDICATORS:
             key = f"{spec['name']}_c"
@@ -207,7 +206,7 @@ class TestCyclicalCensoring:
                     })
             pl.DataFrame(rows).write_parquet(ind_dir / f"{spec['name']}.parquet")
 
-        monkeypatch.setattr("alt_nfp.panel_adapter.INDICATORS_DIR", ind_dir)
+        monkeypatch.setattr("alt_nfp.config.INDICATORS_DIR", ind_dir)
 
         base = date(2020, 1, 1)
         n_months = 36
