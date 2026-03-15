@@ -29,7 +29,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
-from alt_nfp.config import ERA_BREAKS, OUTPUT_DIR, QCEW_NU, STORE_DIR
+from nfp_models.config import ERA_BREAKS, OUTPUT_DIR, QCEW_NU, STORE_DIR
 
 OUT_DIR = OUTPUT_DIR / "qcew_revisions"
 

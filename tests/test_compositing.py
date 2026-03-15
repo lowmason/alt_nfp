@@ -10,7 +10,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.compositing import (
+from nfp_ingest.compositing import (
     CELL_INDEX,
     CELL_REGION,
     CELL_SUPERSECTOR,
@@ -285,7 +285,7 @@ class TestComputeProviderComposite:
 class TestCellLevelIntegration:
     def test_load_provider_series_cell_level(self, tmp_path: Path) -> None:
         """load_provider_series routes cell-level data through compositing."""
-        from alt_nfp.ingest.payroll import _is_cell_level, read_provider_table
+        from nfp_ingest.payroll import _is_cell_level, read_provider_table
 
         store = _build_qcew_store(_REF_DATES[:3], tmp_path)
         prov = _build_provider_df(_REF_DATES[:3])
@@ -297,7 +297,7 @@ class TestCellLevelIntegration:
         assert _is_cell_level(raw)
 
     def test_is_cell_level_national(self) -> None:
-        from alt_nfp.ingest.payroll import _is_cell_level
+        from nfp_ingest.payroll import _is_cell_level
 
         national = pl.DataFrame({
             "geography_type": ["national"],
@@ -308,7 +308,7 @@ class TestCellLevelIntegration:
         assert not _is_cell_level(national)
 
     def test_is_cell_level_region(self) -> None:
-        from alt_nfp.ingest.payroll import _is_cell_level
+        from nfp_ingest.payroll import _is_cell_level
 
         cell = pl.DataFrame({
             "geographic_type": ["region"],

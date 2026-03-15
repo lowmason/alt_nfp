@@ -8,8 +8,8 @@ config structure is valid.
 
 from __future__ import annotations
 
-from alt_nfp.sensitivity import QCEW_SIGMA_CONFIGS, _build_param_specs
-from alt_nfp.settings import NowcastConfig
+from nfp_models.sensitivity import QCEW_SIGMA_CONFIGS, _build_param_specs
+from nfp_models.settings import NowcastConfig
 
 
 class TestSensitivityConfig:

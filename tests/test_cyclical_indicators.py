@@ -16,12 +16,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from alt_nfp.config import CYCLICAL_INDICATORS, INDICATORS_DIR
-from alt_nfp.panel_adapter import (
+from nfp_models.config import CYCLICAL_INDICATORS, INDICATORS_DIR
+from nfp_models.panel_adapter import (
     _load_cyclical_indicators,
     _offset_month,
 )
-from alt_nfp.settings import NowcastConfig
+from nfp_models.settings import NowcastConfig
 
 # Publication lags now live in NowcastConfig.indicators[i].pub_lag
 _cfg = NowcastConfig()
@@ -180,8 +180,8 @@ class TestCyclicalCensoring:
         ref_date + lag > as_of."""
         import datetime
 
-        from alt_nfp.ingest.base import PANEL_SCHEMA
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_lookups.schemas import PANEL_SCHEMA
+        from nfp_models.panel_adapter import panel_to_model_data
 
         ind_dir = tmp_path / "indicators"
         ind_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +206,7 @@ class TestCyclicalCensoring:
                     })
             pl.DataFrame(rows).write_parquet(ind_dir / f"{spec['name']}.parquet")
 
-        monkeypatch.setattr("alt_nfp.config.INDICATORS_DIR", ind_dir)
+        monkeypatch.setattr("nfp_models.config.INDICATORS_DIR", ind_dir)
 
         base = date(2020, 1, 1)
         n_months = 36

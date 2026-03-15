@@ -1,10 +1,10 @@
-"""Tests for alt_nfp.lookups.benchmark_revisions."""
+"""Tests for nfp_lookups.benchmark_revisions."""
 
 from __future__ import annotations
 
 import pytest
 
-from alt_nfp.lookups import BENCHMARK_REVISIONS, get_benchmark_revision
+from nfp_lookups import BENCHMARK_REVISIONS, get_benchmark_revision
 
 
 class TestBenchmarkRevisions:

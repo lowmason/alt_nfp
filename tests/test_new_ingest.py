@@ -6,10 +6,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.aggregate import aggregate_geo
-from alt_nfp.ingest.base import PANEL_SCHEMA
-from alt_nfp.ingest.releases import COMBINED_COLUMNS, COMBINED_SCHEMA, combine_estimates
-from alt_nfp.ingest.tagger import latest_vintage_lookup, tag_estimates
+from nfp_ingest.aggregate import aggregate_geo
+from nfp_lookups.schemas import PANEL_SCHEMA
+from nfp_ingest.releases import COMBINED_COLUMNS, COMBINED_SCHEMA, combine_estimates
+from nfp_ingest.tagger import latest_vintage_lookup, tag_estimates
 
 
 class TestAggregateGeo:
@@ -252,7 +252,7 @@ class TestPanelSchemaGeography:
         assert 'geographic_code' in df.columns
 
     def test_national_panel_validates(self):
-        from alt_nfp.ingest.base import validate_panel
+        from nfp_lookups.schemas import validate_panel
 
         rows = [
             {
@@ -280,7 +280,7 @@ class TestPanelSchemaGeography:
 
     def test_state_level_rows_validate(self):
         """State-level rows with different geographic_code don't conflict."""
-        from alt_nfp.ingest.base import validate_panel
+        from nfp_lookups.schemas import validate_panel
 
         rows = [
             {
@@ -308,7 +308,7 @@ class TestPanelSchemaGeography:
 
     def test_mixed_geography_validates(self):
         """National + state rows for same period/industry don't conflict."""
-        from alt_nfp.ingest.base import validate_panel
+        from nfp_lookups.schemas import validate_panel
 
         rows = [
             {
@@ -344,25 +344,25 @@ class TestFetchQcewWithGeography:
 
     def test_import(self):
         """fetch_qcew_current_with_geography is importable."""
-        from alt_nfp.ingest.qcew import fetch_qcew_current_with_geography
+        from nfp_ingest.qcew import fetch_qcew_current_with_geography
         assert callable(fetch_qcew_current_with_geography)
 
     def test_ingest_qcew_accepts_include_states(self):
         """ingest_qcew accepts include_states parameter."""
         import inspect
-        from alt_nfp.ingest.qcew import ingest_qcew
+        from nfp_ingest.qcew import ingest_qcew
         sig = inspect.signature(ingest_qcew)
         assert 'include_states' in sig.parameters
         assert 'state_fips_list' in sig.parameters
 
     def test_bls_fetch_qcew_with_geography_importable(self):
         """fetch_qcew_with_geography is exported from bls layer."""
-        from alt_nfp.ingest.bls import fetch_qcew_with_geography
+        from nfp_download.bls import fetch_qcew_with_geography
         assert callable(fetch_qcew_with_geography)
 
     def test_qcew_csv_supports_area_slice(self):
         """BLSHttpClient.get_qcew_csv accepts slice_type='area'."""
         import inspect
-        from alt_nfp.ingest.bls import BLSHttpClient
+        from nfp_download.bls import BLSHttpClient
         sig = inspect.signature(BLSHttpClient.get_qcew_csv)
         assert 'slice_type' in sig.parameters

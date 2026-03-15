@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.fred import fetch_fred_series
+from nfp_download.fred import fetch_fred_series
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ class TestFetchFredSeries:
         resp.raise_for_status = MagicMock()
         return resp
 
-    @patch("alt_nfp.ingest.fred.httpx.Client")
+    @patch("nfp_download.fred.httpx.Client")
     def test_parses_observations(self, mock_client_cls):
         ctx = MagicMock()
         ctx.get.return_value = self._mock_response(MOCK_FRED_RESPONSE)
@@ -53,7 +53,7 @@ class TestFetchFredSeries:
         # "." and "invalid" should be dropped → 3 valid rows
         assert len(df) == 3
 
-    @patch("alt_nfp.ingest.fred.httpx.Client")
+    @patch("nfp_download.fred.httpx.Client")
     def test_drops_missing_sentinel(self, mock_client_cls):
         ctx = MagicMock()
         ctx.get.return_value = self._mock_response(MOCK_FRED_RESPONSE)
@@ -64,7 +64,7 @@ class TestFetchFredSeries:
         dates = df["ref_date"].to_list()
         assert date(2024, 3, 1) not in dates
 
-    @patch("alt_nfp.ingest.fred.httpx.Client")
+    @patch("nfp_download.fred.httpx.Client")
     def test_empty_observations(self, mock_client_cls):
         ctx = MagicMock()
         ctx.get.return_value = self._mock_response({"observations": []})
@@ -75,7 +75,7 @@ class TestFetchFredSeries:
         assert len(df) == 0
         assert set(df.columns) == {"ref_date", "value"}
 
-    @patch("alt_nfp.ingest.fred.httpx.Client")
+    @patch("nfp_download.fred.httpx.Client")
     def test_values_are_correct(self, mock_client_cls):
         ctx = MagicMock()
         ctx.get.return_value = self._mock_response(MOCK_FRED_RESPONSE)
@@ -101,7 +101,7 @@ class TestReadIndicator:
     """Test read_indicator with temp parquet files."""
 
     def test_reads_existing_parquet(self, tmp_path):
-        from alt_nfp.ingest.indicators import read_indicator
+        from nfp_ingest.indicators import read_indicator
 
         df = pl.DataFrame({
             "ref_date": [date(2024, 1, 1), date(2024, 2, 1)],
@@ -116,7 +116,7 @@ class TestReadIndicator:
         assert set(result.columns) == {"ref_date", "value"}
 
     def test_missing_file_returns_none(self, tmp_path):
-        from alt_nfp.ingest.indicators import read_indicator
+        from nfp_ingest.indicators import read_indicator
 
         result = read_indicator("nonexistent", store_dir=tmp_path)
         assert result is None
@@ -125,9 +125,9 @@ class TestReadIndicator:
 class TestDownloadIndicators:
     """Test download_indicators with mocked FRED client."""
 
-    @patch("alt_nfp.ingest.indicators.fetch_fred_series")
+    @patch("nfp_ingest.indicators.fetch_fred_series")
     def test_writes_parquet_files(self, mock_fetch, tmp_path):
-        from alt_nfp.ingest.indicators import download_indicators
+        from nfp_ingest.indicators import download_indicators
 
         mock_fetch.return_value = pl.DataFrame({
             "ref_date": [date(2024, 1, 1), date(2024, 2, 1)],
@@ -141,9 +141,9 @@ class TestDownloadIndicators:
             assert results[spec_name] == 2
             assert (tmp_path / f"{spec_name}.parquet").exists()
 
-    @patch("alt_nfp.ingest.indicators.fetch_fred_series")
+    @patch("nfp_ingest.indicators.fetch_fred_series")
     def test_handles_download_failure(self, mock_fetch, tmp_path):
-        from alt_nfp.ingest.indicators import download_indicators
+        from nfp_ingest.indicators import download_indicators
 
         mock_fetch.side_effect = RuntimeError("API down")
 

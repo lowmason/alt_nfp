@@ -1,4 +1,4 @@
-"""Tests for alt_nfp.settings (TOML config system)."""
+"""Tests for nfp_models.settings (TOML config system)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from alt_nfp.settings import (
+from nfp_models.settings import (
     NowcastConfig,
     build_sensitivity_configs,
     load_config,
@@ -311,7 +311,7 @@ class TestSamplingPreset:
 
 class TestProvidersFromSettings:
     def test_converts_to_dataclass(self):
-        from alt_nfp.config import ProviderConfig, providers_from_settings
+        from nfp_models.config import ProviderConfig, providers_from_settings
 
         cfg = NowcastConfig()
         providers = providers_from_settings(cfg)

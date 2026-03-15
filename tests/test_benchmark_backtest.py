@@ -15,7 +15,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from alt_nfp.benchmark_backtest import (
+from nfp_models.benchmark_backtest import (
     DEFAULT_YEARS,
     EXTENDED_YEARS,
     HORIZONS,
@@ -24,7 +24,7 @@ from alt_nfp.benchmark_backtest import (
     compute_backtest_metrics,
     horizon_to_as_of,
 )
-from alt_nfp.lookups.benchmark_revisions import BENCHMARK_REVISIONS
+from nfp_lookups.benchmark_revisions import BENCHMARK_REVISIONS
 
 # ── horizon_to_as_of tests ──────────────────────────────────────────────
 
@@ -170,7 +170,7 @@ class TestAsOfCensoring:
 
     def _make_panel(self, n_months: int = 36) -> pl.DataFrame:
         """Build a minimal synthetic panel for censoring tests."""
-        from alt_nfp.ingest.base import PANEL_SCHEMA
+        from nfp_lookups.schemas import PANEL_SCHEMA
 
         base = date(2023, 1, 1)
         rows: list[dict] = []
@@ -228,7 +228,7 @@ class TestAsOfCensoring:
 
     def test_as_of_reduces_observations(self):
         panel = self._make_panel(36)
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.panel_adapter import panel_to_model_data
 
         data_full = panel_to_model_data(panel, [])
         data_censored = panel_to_model_data(panel, [], as_of=date(2024, 6, 15))
@@ -239,7 +239,7 @@ class TestAsOfCensoring:
 
     def test_as_of_masks_future_qcew(self):
         panel = self._make_panel(36)
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.panel_adapter import panel_to_model_data
 
         data = panel_to_model_data(panel, [], as_of=date(2024, 1, 15))
         n_qcew = len(data["qcew_obs"])
@@ -252,7 +252,7 @@ class TestAsOfCensoring:
 
     def test_as_of_supersedes_censor_ces_from(self):
         panel = self._make_panel(36)
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.panel_adapter import panel_to_model_data
 
         data_asof = panel_to_model_data(
             panel, [],
@@ -270,7 +270,7 @@ class TestAsOfCensoring:
 
     def _make_panel_with_provider(self, n_months: int = 36) -> pl.DataFrame:
         """Build a panel with CES, QCEW, and a fake provider source."""
-        from alt_nfp.ingest.base import PANEL_SCHEMA
+        from nfp_lookups.schemas import PANEL_SCHEMA
 
         base = date(2023, 1, 1)
         rows: list[dict] = []
@@ -350,7 +350,7 @@ class TestAsOfCensoring:
 
     def test_provider_censored_by_vintage_date(self):
         """Provider rows with vintage_date > as_of should be excluded."""
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.panel_adapter import panel_to_model_data
 
         panel = self._make_panel_with_provider(36)
 
@@ -371,7 +371,7 @@ class TestAsOfCensoring:
 
     def test_cyclical_indicators_masked_by_as_of(self):
         """Cyclical indicators should be zeroed out for periods after as_of - lag."""
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.panel_adapter import panel_to_model_data
 
         panel = self._make_panel(36)
         # No as_of: all cyclical indicators should be loaded (or None if files missing)
@@ -383,7 +383,7 @@ class TestAsOfCensoring:
 
         # For each loaded cyclical indicator, the censored version should have
         # at least as many zeros as the full version (since masking adds zeros)
-        from alt_nfp.config import CYCLICAL_INDICATORS
+        from nfp_models.config import CYCLICAL_INDICATORS
 
         for spec in CYCLICAL_INDICATORS:
             key = f"{spec['name']}_c"
@@ -399,7 +399,7 @@ class TestAsOfCensoring:
 
     def test_later_as_of_gives_tighter_info_set(self):
         """Later as_of date should yield weakly more observations across all sources."""
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.panel_adapter import panel_to_model_data
 
         panel = self._make_panel(36)
 
@@ -414,8 +414,8 @@ class TestAsOfCensoring:
     def test_later_as_of_all_sources_weakly_more(self):
         """Later as_of should yield weakly more observations for CES, QCEW,
         and weakly fewer zero-valued cyclical indicator entries."""
-        from alt_nfp.config import CYCLICAL_INDICATORS
-        from alt_nfp.panel_adapter import panel_to_model_data
+        from nfp_models.config import CYCLICAL_INDICATORS
+        from nfp_models.panel_adapter import panel_to_model_data
 
         panel = self._make_panel(36)
         early = panel_to_model_data(panel, [], as_of=date(2024, 1, 15))
@@ -447,7 +447,7 @@ class TestAsOfTighterPosteriors:
 
     def _make_panel(self, n_months: int = 36) -> pl.DataFrame:
         """Reuse the same synthetic panel builder as TestAsOfCensoring."""
-        from alt_nfp.ingest.base import PANEL_SCHEMA
+        from nfp_lookups.schemas import PANEL_SCHEMA
 
         base = date(2023, 1, 1)
         rows: list[dict] = []
@@ -502,9 +502,9 @@ class TestAsOfTighterPosteriors:
 
     def test_later_as_of_reduces_posterior_variance(self):
         """Posterior std of g_cont should be smaller (or equal) with more data."""
-        from alt_nfp.model import build_model
-        from alt_nfp.panel_adapter import panel_to_model_data
-        from alt_nfp.sampling import sample_model
+        from nfp_models.model import build_model
+        from nfp_models.panel_adapter import panel_to_model_data
+        from nfp_models.sampling import sample_model
 
         panel = self._make_panel(36)
         data_early = panel_to_model_data(panel, [], as_of=date(2024, 6, 15))

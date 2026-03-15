@@ -6,10 +6,10 @@ so they can be skipped in CI with ``pytest -m 'not network'``.
 
 import pytest
 
-from alt_nfp.ingest.bls import BLSHttpClient
-from alt_nfp.ingest.bls.ces_national import CES_SERIES_MAP, fetch_ces_national
-from alt_nfp.ingest.bls.ces_state import build_state_series_ids, fetch_ces_state
-from alt_nfp.ingest.bls.qcew import QCEW_INDUSTRY_CODES, fetch_qcew
+from nfp_download.bls import BLSHttpClient
+from nfp_download.bls.ces_national import CES_SERIES_MAP, fetch_ces_national
+from nfp_download.bls.ces_state import build_state_series_ids, fetch_ces_state
+from nfp_download.bls.qcew import QCEW_INDUSTRY_CODES, fetch_qcew
 
 
 @pytest.mark.network

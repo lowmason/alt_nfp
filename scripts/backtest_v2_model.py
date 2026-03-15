@@ -33,10 +33,10 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 
-from alt_nfp.config import OUTPUT_DIR, PROVIDERS
-from alt_nfp.ingest import build_panel
-from alt_nfp.panel_adapter import panel_to_model_data
-from alt_nfp.sampling import LIGHT_SAMPLER_KWARGS, sample_model
+from nfp_models.config import OUTPUT_DIR, PROVIDERS
+from nfp_ingest import build_panel
+from nfp_models.panel_adapter import panel_to_model_data
+from nfp_models.sampling import LIGHT_SAMPLER_KWARGS, sample_model
 
 # v2 model constants (from archive/pp_estimation_v2.py)
 SIGMA_QCEW_M3 = 0.0005

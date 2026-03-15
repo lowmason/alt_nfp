@@ -23,14 +23,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
 
-from alt_nfp.checks import (
+from nfp_models.checks import (
     print_era_summary,
     run_loo_cv,
     run_posterior_predictive_checks,
     run_prior_predictive_checks,
 )
-from alt_nfp.config import BASE_DIR, providers_from_settings
-from alt_nfp.diagnostics import (
+from nfp_models.config import BASE_DIR, providers_from_settings
+from nfp_models.diagnostics import (
     compute_precision_budget,
     plot_divergences,
     print_diagnostics,
@@ -38,14 +38,14 @@ from alt_nfp.diagnostics import (
     print_source_contributions,
     print_windowed_precision_budget,
 )
-from alt_nfp.forecast import forecast_and_plot
-from alt_nfp.ingest import build_panel
-from alt_nfp.model import build_model
-from alt_nfp.panel_adapter import panel_to_model_data
-from alt_nfp.plots import plot_bd_diagnostics, plot_growth_and_seasonal, plot_reconstructed_index
-from alt_nfp.residuals import plot_residuals
-from alt_nfp.sampling import sample_model
-from alt_nfp.settings import load_config, save_config
+from nfp_models.forecast import forecast_and_plot
+from nfp_ingest import build_panel
+from nfp_models.model import build_model
+from nfp_models.panel_adapter import panel_to_model_data
+from nfp_models.plots import plot_bd_diagnostics, plot_growth_and_seasonal, plot_reconstructed_index
+from nfp_models.residuals import plot_residuals
+from nfp_models.sampling import sample_model
+from nfp_models.settings import load_config, save_config
 
 # -------------------------------------------------------------------------------------------------
 # Main function

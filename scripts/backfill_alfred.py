@@ -23,7 +23,7 @@ from datetime import date
 import httpx
 import polars as pl
 
-from alt_nfp.ingest.vintage_store import (
+from nfp_ingest.vintage_store import (
     VINTAGE_STORE_PATH,
     append_to_vintage_store,
     compact_partition,

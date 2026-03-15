@@ -80,14 +80,14 @@ class TestComputePrecisionBudget:
         return MockIData(), data
 
     def test_returns_dataframe(self, mock_idata_and_data):
-        from alt_nfp.diagnostics import compute_precision_budget
+        from nfp_models.diagnostics import compute_precision_budget
 
         idata, data = mock_idata_and_data
         df = compute_precision_budget(idata, data)
         assert hasattr(df, "columns")
 
     def test_has_required_columns(self, mock_idata_and_data):
-        from alt_nfp.diagnostics import compute_precision_budget
+        from nfp_models.diagnostics import compute_precision_budget
 
         idata, data = mock_idata_and_data
         df = compute_precision_budget(idata, data)
@@ -95,7 +95,7 @@ class TestComputePrecisionBudget:
         assert required.issubset(set(df.columns))
 
     def test_shares_sum_to_one(self, mock_idata_and_data):
-        from alt_nfp.diagnostics import compute_precision_budget
+        from nfp_models.diagnostics import compute_precision_budget
 
         idata, data = mock_idata_and_data
         df = compute_precision_budget(idata, data)
@@ -103,7 +103,7 @@ class TestComputePrecisionBudget:
         assert abs(total_share - 1.0) < 1e-10
 
     def test_lambda_and_alpha_columns(self, mock_idata_and_data):
-        from alt_nfp.diagnostics import compute_precision_budget
+        from nfp_models.diagnostics import compute_precision_budget
 
         idata, data = mock_idata_and_data
         df = compute_precision_budget(idata, data)
@@ -111,7 +111,7 @@ class TestComputePrecisionBudget:
         assert "alpha_mean" in df.columns
 
     def test_qcew_lambda_is_one(self, mock_idata_and_data):
-        from alt_nfp.diagnostics import compute_precision_budget
+        from nfp_models.diagnostics import compute_precision_budget
 
         idata, data = mock_idata_and_data
         df = compute_precision_budget(idata, data)

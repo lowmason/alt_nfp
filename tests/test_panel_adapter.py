@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from alt_nfp.config import PROVIDERS
-from alt_nfp.ingest import build_panel
-from alt_nfp.panel_adapter import build_obs_sources, panel_to_model_data
+from nfp_models.config import PROVIDERS
+from nfp_ingest import build_panel
+from nfp_models.panel_adapter import build_obs_sources, panel_to_model_data
 
 
 class TestPanelToModelData:

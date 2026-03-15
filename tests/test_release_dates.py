@@ -7,18 +7,18 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.release_dates.config import (
+from nfp_download.release_dates.config import (
     PUBLICATIONS,
     Publication,
     RELEASE_DATES_PATH,
     VINTAGE_DATES_PATH,
 )
-from alt_nfp.ingest.release_dates.parser import (
+from nfp_download.release_dates.parser import (
     parse_ref_from_path,
     parse_vintage_date,
     ref_date_from_year_month,
 )
-from alt_nfp.ingest.release_dates.vintage_dates import (
+from nfp_ingest.release_dates.vintage_dates import (
     CES_MONTHLY_REVISIONS,
     # SAE_MONTHLY_REVISIONS,
     _ces_publication_date,
@@ -290,7 +290,7 @@ class TestPublicationDateHeuristics:
         publication is typically the 7th-24th.  A 30-day tolerance
         confirms the month is correct.
         """
-        from alt_nfp.ingest.release_dates.vintage_dates import (
+        from nfp_ingest.release_dates.vintage_dates import (
             _QCEW_HISTORICAL_PUBLICATION_LAG,
         )
 

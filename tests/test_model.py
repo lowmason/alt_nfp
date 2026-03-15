@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from alt_nfp.config import N_ERAS, PROVIDERS
-from alt_nfp.ingest import build_panel
-from alt_nfp.model import build_model
-from alt_nfp.panel_adapter import panel_to_model_data
+from nfp_models.config import N_ERAS, PROVIDERS
+from nfp_ingest import build_panel
+from nfp_models.model import build_model
+from nfp_models.panel_adapter import panel_to_model_data
 
 
 @pytest.fixture(scope="module")

@@ -11,8 +11,8 @@ from datetime import date
 
 import polars as pl
 
-from alt_nfp.config import STORE_DIR
-from alt_nfp.ingest.vintage_store import read_vintage_store, transform_to_panel
+from nfp_models.config import STORE_DIR
+from nfp_ingest.vintage_store import read_vintage_store, transform_to_panel
 
 
 def check_ces_coverage() -> None:

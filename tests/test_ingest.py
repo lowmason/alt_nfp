@@ -7,13 +7,13 @@ import numpy as np
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.base import (
+from nfp_lookups.schemas import (
     CES_VINTAGE_SCHEMA,
     PANEL_SCHEMA,
     QCEW_VINTAGE_SCHEMA,
     validate_panel,
 )
-from alt_nfp.ingest.panel import build_panel
+from nfp_ingest.panel import build_panel
 
 
 def _make_panel_rows(n: int = 5, **overrides) -> list[dict]:
@@ -100,7 +100,7 @@ class TestValidatePanel:
         df.write_parquet(parquet_path)
 
         # Load and verify
-        from alt_nfp.ingest.qcew import load_qcew_vintages
+        from nfp_ingest.qcew import load_qcew_vintages
 
         result = load_qcew_vintages(parquet_path)
         assert len(result) > 0
@@ -121,7 +121,7 @@ class TestValidatePanel:
         parquet_path = tmp_path / 'ces_vintages.parquet'
         df.write_parquet(parquet_path)
 
-        from alt_nfp.ingest.ces_national import load_ces_vintages
+        from nfp_ingest.ces_national import load_ces_vintages
 
         result = load_ces_vintages(parquet_path)
         assert len(result) > 0
@@ -171,7 +171,7 @@ class TestValidatePanel:
 
     def test_panel_builds_from_vintage_store(self):
         """build_panel() produces a valid panel from the vintage store."""
-        from alt_nfp.ingest.vintage_store import VINTAGE_STORE_PATH
+        from nfp_ingest.vintage_store import VINTAGE_STORE_PATH
 
         if not VINTAGE_STORE_PATH.exists():
             pytest.skip('Vintage store not present')
@@ -186,7 +186,7 @@ class TestSaveLoadPanel:
 
     def test_save_load_roundtrip(self, tmp_path):
         """Panel survives save → load with identical data."""
-        from alt_nfp.ingest.panel import load_panel, save_panel
+        from nfp_ingest.panel import load_panel, save_panel
 
         df = _make_panel_df(5)
         save_panel(df, tmp_path)
@@ -198,7 +198,7 @@ class TestSaveLoadPanel:
         """save_panel writes a panel_manifest.json with expected keys."""
         import json
 
-        from alt_nfp.ingest.panel import save_panel
+        from nfp_ingest.panel import save_panel
 
         df = _make_panel_df(5)
         save_panel(df, tmp_path)
@@ -216,14 +216,14 @@ class TestSaveLoadPanel:
 
     def test_load_missing_raises(self, tmp_path):
         """load_panel on a directory without parquet raises FileNotFoundError."""
-        from alt_nfp.ingest.panel import load_panel
+        from nfp_ingest.panel import load_panel
 
         with pytest.raises(FileNotFoundError):
             load_panel(tmp_path)
 
     def test_save_creates_directory(self, tmp_path):
         """save_panel creates output directory if it doesn't exist."""
-        from alt_nfp.ingest.panel import save_panel
+        from nfp_ingest.panel import save_panel
 
         out = tmp_path / 'nested' / 'dir'
         save_panel(_make_panel_df(3), out)
@@ -231,7 +231,7 @@ class TestSaveLoadPanel:
 
     def test_save_load_empty_panel(self, tmp_path):
         """Empty panel round-trips correctly."""
-        from alt_nfp.ingest.panel import load_panel, save_panel
+        from nfp_ingest.panel import load_panel, save_panel
 
         df = pl.DataFrame(schema=PANEL_SCHEMA)
         save_panel(df, tmp_path)

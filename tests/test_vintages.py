@@ -6,8 +6,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.base import PANEL_SCHEMA
-from alt_nfp.vintages import (
+from nfp_lookups.schemas import PANEL_SCHEMA
+from nfp_vintages import (
     build_noise_multiplier_vector,
     final_view,
     real_time_view,

@@ -1,8 +1,8 @@
-"""Tests for alt_nfp.ingest.bls._programs — program registry and series ID utils."""
+"""Tests for nfp_download.bls._programs — program registry and series ID utils."""
 
 import pytest
 
-from alt_nfp.ingest.bls._programs import (
+from nfp_download.bls._programs import (
     PROGRAMS,
     BLSProgram,
     SeriesField,

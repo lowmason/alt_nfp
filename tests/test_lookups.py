@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from alt_nfp.lookups import (
+from nfp_lookups import (
     CES_REVISIONS,
     CES_SERIES_MAP,
     DIVISION_NAMES,
@@ -403,7 +403,7 @@ class TestAggregation:
 
         import polars as pl
 
-        from alt_nfp.ingest.qcew import aggregate_to_hierarchy
+        from nfp_ingest.qcew import aggregate_to_hierarchy
 
         rows = []
         for month in range(1, 4):
@@ -429,7 +429,7 @@ class TestAggregation:
 
         import polars as pl
 
-        from alt_nfp.ingest.qcew import aggregate_to_hierarchy
+        from nfp_ingest.qcew import aggregate_to_hierarchy
 
         d = date(2023, 1, 1)
         rows = [
@@ -453,7 +453,7 @@ class TestAggregation:
 
         import polars as pl
 
-        from alt_nfp.ingest.qcew import aggregate_to_hierarchy
+        from nfp_ingest.qcew import aggregate_to_hierarchy
 
         d = date(2023, 1, 1)
         rows = [
@@ -481,8 +481,8 @@ class TestAggregation:
 
         import polars as pl
 
-        from alt_nfp.ingest.base import PANEL_SCHEMA
-        from alt_nfp.ingest.qcew import _build_growth_panel, aggregate_to_hierarchy
+        from nfp_lookups.schemas import PANEL_SCHEMA
+        from nfp_ingest.qcew import _build_growth_panel, aggregate_to_hierarchy
 
         rows = []
         for month in range(1, 7):
@@ -504,7 +504,7 @@ class TestAggregation:
         """_extract_government_employment maps ownership to CES sectors."""
         import polars as pl
 
-        from alt_nfp.ingest.qcew import _extract_government_employment
+        from nfp_ingest.qcew import _extract_government_employment
 
         raw = pl.DataFrame({
             'own_code': ['1', '2', '3', '5'],

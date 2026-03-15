@@ -1,8 +1,8 @@
-"""Tests for alt_nfp.ingest.bls._http — HTTP client and parsing utilities."""
+"""Tests for nfp_download.bls._http — HTTP client and parsing utilities."""
 
 import pytest
 
-from alt_nfp.ingest.bls._http import (
+from nfp_download.bls._http import (
     BLSHttpClient,
     _period_to_month,
     _reference_day,

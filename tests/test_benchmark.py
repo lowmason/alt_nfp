@@ -1,4 +1,4 @@
-"""Tests for alt_nfp.benchmark — benchmark revision extraction."""
+"""Tests for nfp_models.benchmark — benchmark revision extraction."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import polars as pl
 import pytest
 import xarray as xr
 
-from alt_nfp.benchmark import (
+from nfp_models.benchmark import (
     _find_benchmark_window,
     decompose_benchmark_revision,
     extract_benchmark_revision,

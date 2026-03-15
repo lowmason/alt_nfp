@@ -1,4 +1,4 @@
-"""Tests for alt_nfp.ingest.vintage_store — read, transform, append, compact."""
+"""Tests for nfp_ingest.vintage_store — read, transform, append, compact."""
 
 from datetime import date
 from pathlib import Path
@@ -7,8 +7,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from alt_nfp.ingest.base import PANEL_SCHEMA
-from alt_nfp.ingest.vintage_store import (
+from nfp_lookups.schemas import PANEL_SCHEMA
+from nfp_ingest.vintage_store import (
     VINTAGE_STORE_SCHEMA,
     append_to_vintage_store,
     compact_partition,
@@ -17,7 +17,7 @@ from alt_nfp.ingest.vintage_store import (
 )
 
 # Access private helpers for direct unit testing
-from alt_nfp.ingest import vintage_store as _vs
+from nfp_ingest import vintage_store as _vs
 
 _derive_source_tags = _vs._derive_source_tags
 _select_ces_at_horizon = _vs._select_ces_at_horizon
