@@ -17,20 +17,20 @@ members = [
     "nfp-download",
     "nfp-ingest",
     "nfp-lookups",
-    "nfp-models",
+    "nfp-model-hmc",
     "nfp-vintages",
 ]
 
 [[package]]
 name = "alt-nfp"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "marimo" },
     { name = "nfp-download" },
     { name = "nfp-ingest" },
     { name = "nfp-lookups" },
-    { name = "nfp-models" },
+    { name = "nfp-model-hmc" },
     { name = "nfp-vintages" },
 ]
 
@@ -76,7 +76,7 @@ requires-dist = [
     { name = "nfp-download", editable = "packages/nfp-download" },
     { name = "nfp-ingest", editable = "packages/nfp-ingest" },
     { name = "nfp-lookups", editable = "packages/nfp-lookups" },
-    { name = "nfp-models", editable = "packages/nfp-models" },
+    { name = "nfp-model-hmc", editable = "packages/nfp-model-hmc" },
     { name = "nfp-vintages", editable = "packages/nfp-vintages" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -2883,9 +2883,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "nfp-models"
+name = "nfp-model-hmc"
 version = "0.1.0"
-source = { editable = "packages/nfp-models" }
+source = { editable = "packages/nfp-model-hmc" }
 dependencies = [
     { name = "arviz" },
     { name = "matplotlib" },

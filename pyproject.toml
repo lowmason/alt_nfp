@@ -23,12 +23,9 @@ dependencies = [
     "nfp-download",
     "nfp-ingest",
     "nfp-vintages",
-    "nfp-models",
+    "nfp-model-hmc",
     "marimo>=0.19.8",
 ]
-
-[project.scripts]
-alt-nfp = "alt_nfp.vintages.__main__:app"
 
 [project.optional-dependencies]
 dev = [
@@ -43,9 +40,7 @@ viz = [
     "arviz>=0.17.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# No build-system: this is a virtual workspace root (no installable package)
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -55,7 +50,7 @@ nfp-lookups = { workspace = true }
 nfp-download = { workspace = true }
 nfp-ingest = { workspace = true }
 nfp-vintages = { workspace = true }
-nfp-models = { workspace = true }
+nfp-model-hmc = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -75,11 +70,6 @@ docs = [
     "mkdocstrings[python]>=1.0.3",
 ]
 
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/alt_nfp"]
 
 [tool.black]
 line-length = 100
@@ -109,7 +99,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=src/alt_nfp --cov-report=term-missing --cov-report=html"
+addopts = "--cov=packages/nfp-lookups/src/nfp_lookups --cov=packages/nfp-download/src/nfp_download --cov=packages/nfp-ingest/src/nfp_ingest --cov=packages/nfp-vintages/src/nfp_vintages --cov=packages/nfp-model-hmc/src/nfp_models --cov-report=term-missing --cov-report=html"
 markers = [
     "network: tests that require network access (deselect with '-m not network')",
 ]

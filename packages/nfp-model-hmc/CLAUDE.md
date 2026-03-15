@@ -1,4 +1,4 @@
-# nfp-models
+# nfp-model-hmc
 
 Bayesian state space model for nowcasting U.S. employment growth (NFP).
 
