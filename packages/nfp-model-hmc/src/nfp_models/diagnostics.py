@@ -12,12 +12,17 @@ After MCMC sampling this module provides:
 
 from __future__ import annotations
 
+import logging
+
 import arviz as az
+
+logger = logging.getLogger(__name__)
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import OUTPUT_DIR, QCEW_NU
+from nfp_lookups.paths import OUTPUT_DIR
+
 from .settings import NowcastConfig
 
 # =========================================================================
@@ -29,17 +34,17 @@ def print_diagnostics(idata: az.InferenceData, data: dict, cfg: NowcastConfig | 
     """Print sampling diagnostics and structured parameter summary."""
     pp_data = data["pp_data"]
 
-    print("=" * 72)
-    print("SAMPLING DIAGNOSTICS")
-    print("=" * 72)
+    logger.info("=" * 72)
+    logger.info("SAMPLING DIAGNOSTICS")
+    logger.info("=" * 72)
 
     divs = int(idata.sample_stats.diverging.sum().values)
-    print(f"Divergences: {divs}")
+    logger.info("Divergences: %d", divs)
     try:
         max_td = int(idata.sample_stats.tree_depth.max().values)
-        print(f"Max tree depth: {max_td}")
-    except Exception:
-        pass
+        logger.info("Max tree depth: %d", max_td)
+    except (AttributeError, KeyError):
+        logger.debug("tree_depth not available in sample_stats")
 
     # Build var_names dynamically — era-specific or scalar latent params
     has_era = "mu_g_era" in idata.posterior
@@ -68,68 +73,78 @@ def print_diagnostics(idata: az.InferenceData, data: dict, cfg: NowcastConfig | 
         if pp["config"].error_model == "ar1":
             var_names.append(f"rho_{name}")
 
-    print("\n" + "=" * 72)
-    print("PARAMETER SUMMARY")
-    print("=" * 72)
+    logger.info("")
+    logger.info("=" * 72)
+    logger.info("PARAMETER SUMMARY")
+    logger.info("=" * 72)
     summary = az.summary(idata, var_names=var_names, hdi_prob=0.80)
-    print(summary.to_string())
+    logger.info("%s", summary.to_string())
 
     rhat_bad = summary[summary["r_hat"] > 1.01]
     ess_bad = summary[summary["ess_bulk"] < 400]
     if len(rhat_bad) > 0:
-        print("\n** WARNING: Parameters with R-hat > 1.01:")
+        logger.warning("Parameters with R-hat > 1.01:")
         for pname, row in rhat_bad.iterrows():
-            print(f"    {pname}: R-hat = {row['r_hat']:.4f}")
+            logger.warning("    %s: R-hat = %.4f", pname, row['r_hat'])
     if len(ess_bad) > 0:
-        print("\n** WARNING: Parameters with ESS_bulk < 400:")
+        logger.warning("Parameters with ESS_bulk < 400:")
         for pname, row in ess_bad.iterrows():
-            print(f"    {pname}: ESS = {row['ess_bulk']:.0f}")
+            logger.warning("    %s: ESS = %.0f", pname, row['ess_bulk'])
     if len(rhat_bad) == 0 and len(ess_bad) == 0:
-        print("\nAll parameters converged (R-hat <= 1.01, ESS_bulk >= 400)")
+        logger.info("All parameters converged (R-hat <= 1.01, ESS_bulk >= 400)")
 
     # ----- Key outputs -----
-    print("\n" + "=" * 72)
-    print("KEY OUTPUTS")
-    print("=" * 72)
+    logger.info("")
+    logger.info("=" * 72)
+    logger.info("KEY OUTPUTS")
+    logger.info("=" * 72)
 
-    _print_bd_summary(idata)
+    _print_bd_summary(idata, cfg=cfg)
     _print_ces_summary(idata, data)
     _print_pp_summary(idata, pp_data)
 
 
-def _print_bd_summary(idata: az.InferenceData) -> None:
+def _print_bd_summary(
+    idata: az.InferenceData, cfg: NowcastConfig | None = None
+) -> None:
     """Print posterior summary of structural birth/death parameters."""
     phi_0 = idata.posterior["phi_0"].values.flatten()
     sigma_bd = idata.posterior["sigma_bd"].values.flatten()
     bd_mean = idata.posterior["bd"].values.mean(axis=(0, 1))
 
-    print("\nStructural Birth/Death:")
-    print(
-        f"  \u03c6_0 (intercept):    {phi_0.mean() * 100:+.4f}%/mo  "
-        f"[{np.percentile(phi_0, 10) * 100:+.4f}%, "
-        f"{np.percentile(phi_0, 90) * 100:+.4f}%]"
+    logger.info("")
+    logger.info("Structural Birth/Death:")
+    logger.info(
+        "  \u03c6_0 (intercept):    %+.4f%%/mo  [%+.4f%%, %+.4f%%]",
+        phi_0.mean() * 100,
+        np.percentile(phi_0, 10) * 100,
+        np.percentile(phi_0, 90) * 100,
     )
-    print(f"  \u03c3_bd (innovation):  {sigma_bd.mean() * 100:.4f}%")
+    logger.info("  \u03c3_bd (innovation):  %.4f%%", sigma_bd.mean() * 100)
 
     if "phi_3" in idata.posterior:
-        from .config import CYCLICAL_INDICATORS
-
+        cfg = cfg or NowcastConfig()
         phi_3 = idata.posterior["phi_3"].values  # (chains, draws, n_cyclical)
-        cyclical_labels = [spec['name'] for spec in CYCLICAL_INDICATORS]
+        cyclical_labels = [ind.name for ind in cfg.indicators]
         n_cyc = phi_3.shape[-1]
         for i in range(n_cyc):
             v = phi_3[:, :, i].flatten()
             lbl = cyclical_labels[i] if i < len(cyclical_labels) else f'cyc_{i}'
-            print(
-                f"  \u03c6_3[{lbl}]:  {v.mean():.3f}  "
-                f"[{np.percentile(v, 10):.3f}, {np.percentile(v, 90):.3f}]"
+            logger.info(
+                "  \u03c6_3[%s]:  %.3f  [%.3f, %.3f]",
+                lbl, v.mean(), np.percentile(v, 10), np.percentile(v, 90),
             )
 
-    print(
-        f"  bd_t mean over sample: {bd_mean.mean() * 100:+.4f}%/mo "
-        f"(annualised: {bd_mean.mean() * 12 * 100:+.2f}%)"
+    logger.info(
+        "  bd_t mean over sample: %+.4f%%/mo (annualised: %+.2f%%)",
+        bd_mean.mean() * 100,
+        bd_mean.mean() * 12 * 100,
     )
-    print(f"  bd_t range:         [{bd_mean.min() * 100:+.4f}%, {bd_mean.max() * 100:+.4f}%]")
+    logger.info(
+        "  bd_t range:         [%+.4f%%, %+.4f%%]",
+        bd_mean.min() * 100,
+        bd_mean.max() * 100,
+    )
 
 
 def _print_ces_summary(idata: az.InferenceData, data: dict | None = None) -> None:
@@ -139,11 +154,12 @@ def _print_ces_summary(idata: az.InferenceData, data: dict | None = None) -> Non
     s_sa = idata.posterior["sigma_ces_sa"].values   # (chains, draws, n_ces_v)
     s_nsa = idata.posterior["sigma_ces_nsa"].values  # (chains, draws, n_ces_v)
 
-    print("\nCES observation parameters (vs QCEW anchor):")
-    print(f"  \u03b1_ces  = {a.mean() * 100:+.4f}%/mo  (bias relative to true growth)")
-    print(
-        f"  \u03bb_ces  = {l.mean():.4f}  "
-        f"[{np.percentile(l, 10):.4f}, {np.percentile(l, 90):.4f}]"
+    logger.info("")
+    logger.info("CES observation parameters (vs QCEW anchor):")
+    logger.info("  \u03b1_ces  = %+.4f%%/mo  (bias relative to true growth)", a.mean() * 100)
+    logger.info(
+        "  \u03bb_ces  = %.4f  [%.4f, %.4f]",
+        l.mean(), np.percentile(l, 10), np.percentile(l, 90),
     )
     _all_vintage_names = {0: "1st", 1: "2nd", 2: "Final"}
     vintage_map = data.get("ces_vintage_map") if data else None
@@ -155,16 +171,17 @@ def _print_ces_summary(idata: az.InferenceData, data: dict | None = None) -> Non
         label = _all_vintage_names.get(orig_v, f"v{orig_v}")
         sa_v = s_sa[:, :, i].flatten()
         nsa_v = s_nsa[:, :, i].flatten()
-        print(
-            f"  \u03c3_ces_sa[{label}] = {sa_v.mean() * 100:.3f}%  "
-            f"\u03c3_ces_nsa[{label}] = {nsa_v.mean() * 100:.3f}%"
+        logger.info(
+            "  \u03c3_ces_sa[%s] = %.3f%%  \u03c3_ces_nsa[%s] = %.3f%%",
+            label, sa_v.mean() * 100, label, nsa_v.mean() * 100,
         )
-    print("  (best-available print per month; σ selected by vintage index)")
+    logger.info("  (best-available print per month; \u03c3 selected by vintage index)")
 
 
 def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
     """Print posterior summary of payroll-provider observation parameters."""
-    print("\nPP signal loadings (\u03bb), bias (\u03b1), and noise (\u03c3):")
+    logger.info("")
+    logger.info("PP signal loadings (\u03bb), bias (\u03b1), and noise (\u03c3):")
     for pp in pp_data:
         name = pp["config"].name.lower()
         lam_p = idata.posterior[f"lam_{name}"].values.flatten()
@@ -179,11 +196,13 @@ def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
                 f"[{np.percentile(rho_p, 10):.3f}, {np.percentile(rho_p, 90):.3f}]"
                 f"  |  \u03c3_marg = {marg_sigma * 100:.3f}%"
             )
-        print(
-            f"  {pp['name']:5}: \u03bb = {lam_p.mean():.3f} "
-            f"[{np.percentile(lam_p, 10):.3f}, {np.percentile(lam_p, 90):.3f}]"
-            f"  |  \u03b1 = {alp_p.mean() * 100:+.4f}%"
-            f"  |  \u03c3 = {sig_p.mean() * 100:.3f}%{extra}"
+        logger.info(
+            "  %5s: \u03bb = %.3f [%.3f, %.3f]"
+            "  |  \u03b1 = %+.4f%%"
+            "  |  \u03c3 = %.3f%%%s",
+            pp['name'], lam_p.mean(),
+            np.percentile(lam_p, 10), np.percentile(lam_p, 90),
+            alp_p.mean() * 100, sig_p.mean() * 100, extra,
         )
 
 
@@ -193,9 +212,10 @@ def _print_pp_summary(idata: az.InferenceData, pp_data: list[dict]) -> None:
 
 
 def _qcew_precision_by_tier(
-    idata: az.InferenceData, data: dict
+    idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None
 ) -> tuple[float, float, int, int]:
     """Total QCEW precision and tier counts from posterior sigmas and multipliers."""
+    cfg = cfg or NowcastConfig()
     sigma_mid = float(idata.posterior["sigma_qcew_mid"].values.flatten().mean())
     sigma_boundary = float(
         idata.posterior["sigma_qcew_boundary"].values.flatten().mean()
@@ -209,7 +229,8 @@ def _qcew_precision_by_tier(
         sigma_boundary * qcew_noise_mult,
     )
     # Student-t Fisher information: (nu+1)/((nu+3)*sigma^2) vs Normal 1/sigma^2
-    studentt_factor = (QCEW_NU + 1) / (QCEW_NU + 3)
+    qcew_nu = cfg.model.qcew.nu
+    studentt_factor = (qcew_nu + 1) / (qcew_nu + 3)
     prec_per_obs = studentt_factor / (sigma_per_obs**2)
     total_prec_qcew = float(np.sum(prec_per_obs))
     n_m2 = int(qcew_is_m2.sum())
@@ -249,8 +270,11 @@ def _ces_precision_rows(
     return rows, total
 
 
-def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
+def print_source_contributions(
+    idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None
+) -> None:
     """Quantify each source's precision-weighted information contribution."""
+    cfg = cfg or NowcastConfig()
     pp_data = data["pp_data"]
 
     (
@@ -259,7 +283,7 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
         prec_qcew_boundary,
         n_qcew_m2,
         n_qcew_boundary,
-    ) = _qcew_precision_by_tier(idata, data)
+    ) = _qcew_precision_by_tier(idata, data, cfg=cfg)
     prec_per_m2 = prec_qcew_m2 / n_qcew_m2 if n_qcew_m2 > 0 else 0.0
     prec_per_boundary = (
         prec_qcew_boundary / n_qcew_boundary if n_qcew_boundary > 0 else 0.0
@@ -284,16 +308,19 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
 
     total_all = total_prec_ces + total_prec_qcew + total_prec_pp
 
-    print("\n" + "=" * 72)
-    print("DATA SOURCE CONTRIBUTION (precision-weighted)")
-    print("=" * 72)
+    logger.info("")
+    logger.info("=" * 72)
+    logger.info("DATA SOURCE CONTRIBUTION (precision-weighted)")
+    logger.info("=" * 72)
     hdr = f"{'Source':<20} {'Obs':<8} {'Prec/obs':>12} {'Total prec':>14} {'Share':>8}"
-    print(hdr)
-    print("-" * 72)
+    logger.info("%s", hdr)
+    logger.info("-" * 72)
 
     def _row(nm: str, n: int, pp_obs: float, total: float) -> None:
         pct = 100.0 * total / total_all
-        print(f"{nm:<20} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%")
+        logger.info(
+            "%s", f"{nm:<20} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%"
+        )
 
     for nm, n, pp_per, pp_tot in ces_rows:
         _row(nm, n, pp_per, pp_tot)
@@ -303,17 +330,22 @@ def print_source_contributions(idata: az.InferenceData, data: dict) -> None:
         _row("QCEW (M2)", n_qcew_m2, prec_per_m2, prec_qcew_m2)
     if n_qcew_boundary > 0:
         _row("QCEW (M3+M1)", n_qcew_boundary, prec_per_boundary, prec_qcew_boundary)
-    print("-" * 72)
-    print(f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}")
+    logger.info("-" * 72)
+    logger.info(
+        "%s", f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}"
+    )
 
 
-def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFrame:
+def compute_precision_budget(
+    idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None
+) -> pl.DataFrame:
     """Compute precision-weighted information budget as a structured DataFrame.
 
     Returns a DataFrame with columns:
         source, n_obs, precision_per_obs, total_precision, share,
         lambda_mean, alpha_mean
     """
+    cfg = cfg or NowcastConfig()
     pp_data = data["pp_data"]
     lambda_ces = float(idata.posterior["lambda_ces"].values.flatten().mean())
     alpha_ces = float(idata.posterior["alpha_ces"].values.flatten().mean())
@@ -324,7 +356,7 @@ def compute_precision_budget(idata: az.InferenceData, data: dict) -> pl.DataFram
         prec_qcew_boundary,
         n_qcew_m2,
         n_qcew_boundary,
-    ) = _qcew_precision_by_tier(idata, data)
+    ) = _qcew_precision_by_tier(idata, data, cfg=cfg)
     prec_per_m2 = prec_qcew_m2 / n_qcew_m2 if n_qcew_m2 > 0 else 0.0
     prec_per_boundary = (
         prec_qcew_boundary / n_qcew_boundary if n_qcew_boundary > 0 else 0.0
@@ -399,12 +431,15 @@ _ERA_LABELS_DIAG = [
 ]
 
 
-def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None:
+def print_windowed_precision_budget(
+    idata: az.InferenceData, data: dict, cfg: NowcastConfig | None = None
+) -> None:
     """Print precision-weighted information budget restricted to each era window.
 
     Shows per-era observation counts and precision shares so that sources
     (e.g. the G provider) that only exist in one era can be compared fairly.
     """
+    cfg = cfg or NowcastConfig()
     pp_data = data["pp_data"]
     era_idx = data["era_idx"]  # (T,)
     dates = data["dates"]
@@ -474,7 +509,8 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
             sigma_mid * qcew_noise_mult,
             sigma_boundary * qcew_noise_mult,
         )
-        studentt_factor = (QCEW_NU + 1) / (QCEW_NU + 3)
+        qcew_nu = cfg.model.qcew.nu
+        studentt_factor = (qcew_nu + 1) / (qcew_nu + 3)
         prec_per = studentt_factor / (sigma_per**2)
         total_qcew = float(np.sum(prec_per[in_era]))
         n_qcew_m2 = int((in_era & qcew_is_m2).sum())
@@ -494,17 +530,21 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
         if total_all == 0:
             continue
 
-        print("\n" + "=" * 72)
-        print("ERA-SPECIFIC PRECISION BUDGET")
-        print("=" * 72)
-        print(f"{label}: {start_d} \u2192 {end_d}  ({n_months} months)")
+        logger.info("")
+        logger.info("=" * 72)
+        logger.info("ERA-SPECIFIC PRECISION BUDGET")
+        logger.info("=" * 72)
+        logger.info("%s: %s \u2192 %s  (%d months)", label, start_d, end_d, n_months)
         hdr = f"{'Source':<20} {'Obs':<8} {'Prec/obs':>12} {'Total prec':>14} {'Share':>8}"
-        print(hdr)
-        print("-" * 72)
+        logger.info("%s", hdr)
+        logger.info("-" * 72)
 
         def _row(nm: str, n: int, pp_obs: float, total: float) -> None:
             pct = 100.0 * total / total_all
-            print(f"{nm:<20} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%")
+            logger.info(
+                "%s",
+                f"{nm:<20} {n:<8} {pp_obs:>12,.0f} {total:>14,.0f} {pct:>7.1f}%",
+            )
 
         for nm, n, pp_per, pp_tot in ces_rows:
             _row(nm, n, pp_per, pp_tot)
@@ -519,8 +559,10 @@ def print_windowed_precision_budget(idata: az.InferenceData, data: dict) -> None
                 prec_per_boundary,
                 prec_qcew_boundary_era,
             )
-        print("-" * 72)
-        print(f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}")
+        logger.info("-" * 72)
+        logger.info(
+            "%s", f"{'TOTAL':<16} {'':8} {'':12} {total_all:>14,.0f} {'100.0%':>8}"
+        )
 
 
 # =========================================================================
@@ -544,15 +586,17 @@ def print_provider_value_of_information(idata: az.InferenceData, data: dict) -> 
     hdi_hi = np.percentile(g_cont, 90, axis=(0, 1))
     hdi_width = hdi_hi - hdi_lo  # (T,) in decimal; *100 for %
 
-    print("\n" + "=" * 72)
-    print("PROVIDER VALUE-OF-INFORMATION (posterior g_cont 80% HDI width)")
-    print("=" * 72)
+    logger.info("")
+    logger.info("=" * 72)
+    logger.info("PROVIDER VALUE-OF-INFORMATION (posterior g_cont 80%% HDI width)")
+    logger.info("=" * 72)
 
     for pp in pp_data:
         name = pp["config"].name.lower()
         covered = np.asarray(pp["pp_obs"])
         if len(covered) == 0:
-            print(f"\n  {pp['name']}: no observations \u2014 skipping")
+            logger.info("")
+            logger.info("  %s: no observations \u2014 skipping", pp['name'])
             continue
 
         # Era(s) where this provider has data
@@ -572,22 +616,28 @@ def print_provider_value_of_information(idata: az.InferenceData, data: dict) -> 
                 width_without = np.mean(hdi_width[in_era_uncovered]) * 100
                 n_without = len(in_era_uncovered)
                 pct_narrower = (1.0 - width_with / width_without) * 100.0
-                print(
-                    f"\n  {pp['name']} \u2014 {label}:"
+                logger.info("")
+                logger.info("  %s \u2014 %s:", pp['name'], label)
+                logger.info(
+                    "    With %s data:    %.4f%%/mo mean HDI width (n=%d)",
+                    pp['name'], width_with, n_with,
                 )
-                print(
-                    f"    With {pp['name']} data:    {width_with:.4f}%/mo mean HDI width (n={n_with})"
+                logger.info(
+                    "    Without %s data: %.4f%%/mo mean HDI width (n=%d)",
+                    pp['name'], width_without, n_without,
                 )
-                print(
-                    f"    Without {pp['name']} data: {width_without:.4f}%/mo mean HDI width (n={n_without})"
-                )
-                print(f"    Narrowing:               {pct_narrower:+.1f}%")
+                logger.info("    Narrowing:               %+.1f%%", pct_narrower)
             else:
-                print(f"\n  {pp['name']} \u2014 {label}:")
-                print(
-                    f"    With {pp['name']} data:    {width_with:.4f}%/mo mean HDI width (n={n_with})"
+                logger.info("")
+                logger.info("  %s \u2014 %s:", pp['name'], label)
+                logger.info(
+                    "    With %s data:    %.4f%%/mo mean HDI width (n=%d)",
+                    pp['name'], width_with, n_with,
                 )
-                print("    (all months in this era have provider data \u2014 no uncovered baseline)")
+                logger.info(
+                    "    (all months in this era have provider data"
+                    " \u2014 no uncovered baseline)"
+                )
 
 
 # =========================================================================
@@ -600,10 +650,10 @@ def plot_divergences(idata: az.InferenceData, data: dict, cfg: NowcastConfig | N
     diverging = idata.sample_stats.diverging.values
     n_divs = int(diverging.sum())
     if n_divs == 0:
-        print("\nNo divergent transitions \u2014 skipping divergence plot.")
+        logger.info("No divergent transitions \u2014 skipping divergence plot.")
         return
 
-    print(f"\nPlotting {n_divs} divergent transitions\u2026")
+    logger.info("Plotting %d divergent transitions...", n_divs)
     div_flat = diverging.flatten().astype(bool)
 
     phi_name = "phi_raw" if "phi_raw" in idata.posterior else "phi_raw_era"
@@ -621,7 +671,7 @@ def plot_divergences(idata: az.InferenceData, data: dict, cfg: NowcastConfig | N
     pairs = [(p1, p2, l1, l2) for p1, p2, l1, l2 in pairs
              if p1 in idata.posterior and p2 in idata.posterior]
     if not pairs:
-        print("  No plottable parameter pairs found \u2014 skipping.")
+        logger.info("  No plottable parameter pairs found \u2014 skipping.")
         return
 
     n_pairs = len(pairs)
@@ -658,7 +708,7 @@ def plot_divergences(idata: az.InferenceData, data: dict, cfg: NowcastConfig | N
     plt.tight_layout()
     fig.savefig(OUTPUT_DIR / "divergences.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved: {OUTPUT_DIR / 'divergences.png'}")
+    logger.info("Saved: %s", OUTPUT_DIR / "divergences.png")
 
 
 # =========================================================================
@@ -700,17 +750,18 @@ def print_weight_staleness(providers: list) -> None:
         n_current = int((s == 0).sum())
         n_forward = int((s > 0).sum())
 
-        print(f"\n  {cfg.name}:")
-        print(f"    Months with current QCEW weights:       {n_current}")
-        print(f"    Months with carried-forward weights:     {n_forward}")
+        logger.info("")
+        logger.info("  %s:", cfg.name)
+        logger.info("    Months with current QCEW weights:       %d", n_current)
+        logger.info("    Months with carried-forward weights:     %d", n_forward)
         if n_forward > 0:
             fwd = staleness.filter(pl.col("weight_staleness_months") > 0)
             fwd_s = fwd["weight_staleness_months"]
-            print(
-                f"    Staleness (carried-forward months):      "
-                f"min={fwd_s.min()}, max={fwd_s.max()}, "
-                f"mean={fwd_s.mean():.1f}"
+            logger.info(
+                "    Staleness (carried-forward months):      "
+                "min=%s, max=%s, mean=%.1f",
+                fwd_s.min(), fwd_s.max(), fwd_s.mean(),
             )
 
     if not found_any:
-        print("  (no cell-level providers detected)")
+        logger.info("  (no cell-level providers detected)")

@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import polars as pl
 import pytest
 
@@ -145,7 +146,7 @@ class TestDownloadIndicators:
     def test_handles_download_failure(self, mock_fetch, tmp_path):
         from nfp_ingest.indicators import download_indicators
 
-        mock_fetch.side_effect = RuntimeError("API down")
+        mock_fetch.side_effect = httpx.ConnectError("API down")
 
         results = download_indicators(store_dir=tmp_path, api_key="fake")
 

@@ -1,6 +1,9 @@
 # Project-specific exclusions
 data/
 *.nc
+output/*.png
+output/*.parquet
+archive/output/
 
 # Python
 __pycache__/

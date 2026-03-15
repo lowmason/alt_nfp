@@ -82,8 +82,8 @@ def build_panel(
             pp_df = ingest_provider(cfg)
             if len(pp_df) > 0:
                 parts.append(pp_df)
-        except Exception as e:
-            logger.warning(f'Provider {cfg.name} ingestion failed: {e}')
+        except (FileNotFoundError, ValueError, KeyError) as e:
+            logger.warning('Provider %s ingestion failed: %s', cfg.name, e)
 
     if not parts:
         logger.warning('No data ingested from any source')
@@ -125,7 +125,7 @@ def save_panel(panel: pl.DataFrame, output_dir: Path) -> None:
         )
         if result.returncode == 0:
             git_hash = result.stdout.strip()
-    except Exception:
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
     manifest = {

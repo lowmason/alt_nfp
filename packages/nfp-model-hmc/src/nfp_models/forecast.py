@@ -11,7 +11,10 @@ and last-year Fourier seasonal coefficients.  Outputs include:
 
 from __future__ import annotations
 
+import logging
 from datetime import date
+
+logger = logging.getLogger(__name__)
 
 import arviz as az
 import matplotlib.dates as mdates
@@ -170,72 +173,95 @@ def forecast_and_plot(
 
 def _print_index_table(dates, forecast_dates, sa_h, nsa_h, sa_f, nsa_f):
     """Print console table of SA/NSA index levels (historical tail + forecast)."""
-    print("=" * 72)
-    print("FORECAST: SA & NSA Index to 2026-01-12")
-    print("=" * 72)
-    print(f"{'Date':>12}  {'SA Mean':>9} {'SA 80% HDI':>18}  "
-          f"{'NSA Mean':>9} {'NSA 80% HDI':>18}")
-    print("-" * 72)
+    logger.info("=" * 72)
+    logger.info("FORECAST: SA & NSA Index to 2026-01-12")
+    logger.info("=" * 72)
+    logger.info(
+        "%s",
+        f"{'Date':>12}  {'SA Mean':>9} {'SA 80% HDI':>18}  "
+        f"{'NSA Mean':>9} {'NSA 80% HDI':>18}",
+    )
+    logger.info("-" * 72)
 
     sa_last = sa_h[:, :, -1].flatten()
     nsa_last = nsa_h[:, :, -1].flatten()
-    print(f"{str(dates[-1]):>12}  {sa_last.mean():9.2f} "
-          f"[{np.percentile(sa_last, 10):7.2f}, {np.percentile(sa_last, 90):7.2f}]  "
-          f"{nsa_last.mean():9.2f} "
-          f"[{np.percentile(nsa_last, 10):7.2f}, {np.percentile(nsa_last, 90):7.2f}]  "
-          f"\u2190 last obs")
+    logger.info(
+        "%s",
+        f"{str(dates[-1]):>12}  {sa_last.mean():9.2f} "
+        f"[{np.percentile(sa_last, 10):7.2f}, {np.percentile(sa_last, 90):7.2f}]  "
+        f"{nsa_last.mean():9.2f} "
+        f"[{np.percentile(nsa_last, 10):7.2f}, {np.percentile(nsa_last, 90):7.2f}]  "
+        f"\u2190 last obs",
+    )
 
     for i, fd in enumerate(forecast_dates):
         sa_v = sa_f[:, :, i].flatten()
         nsa_v = nsa_f[:, :, i].flatten()
-        print(f"{str(fd):>12}  {sa_v.mean():9.2f} "
-              f"[{np.percentile(sa_v, 10):7.2f}, {np.percentile(sa_v, 90):7.2f}]  "
-              f"{nsa_v.mean():9.2f} "
-              f"[{np.percentile(nsa_v, 10):7.2f}, {np.percentile(nsa_v, 90):7.2f}]  "
-              f"\u2190 forecast")
+        logger.info(
+            "%s",
+            f"{str(fd):>12}  {sa_v.mean():9.2f} "
+            f"[{np.percentile(sa_v, 10):7.2f}, {np.percentile(sa_v, 90):7.2f}]  "
+            f"{nsa_v.mean():9.2f} "
+            f"[{np.percentile(nsa_v, 10):7.2f}, {np.percentile(nsa_v, 90):7.2f}]  "
+            f"\u2190 forecast",
+        )
 
 
 def _print_jobs_table(dates, forecast_dates, c_sa_h, c_nsa_h, c_sa_f, c_nsa_f):
     """Print console table of month-over-month jobs added (thousands)."""
-    print("\n" + "=" * 84)
-    print("FORECAST: Jobs added (month-over-month change, thousands)")
-    print("  Positive = jobs added, negative = jobs lost.")
-    print("=" * 84)
-    print(f"{'Date':>12}  {'SA Mean':>10} {'SA 80% HDI':>22}  "
-          f"{'NSA Mean':>10} {'NSA 80% HDI':>22}")
-    print("-" * 84)
+    logger.info("")
+    logger.info("=" * 84)
+    logger.info("FORECAST: Jobs added (month-over-month change, thousands)")
+    logger.info("  Positive = jobs added, negative = jobs lost.")
+    logger.info("=" * 84)
+    logger.info(
+        "%s",
+        f"{'Date':>12}  {'SA Mean':>10} {'SA 80% HDI':>22}  "
+        f"{'NSA Mean':>10} {'NSA 80% HDI':>22}",
+    )
+    logger.info("-" * 84)
 
     last_sa = c_sa_h[:, :, -1].flatten()
     last_nsa = c_nsa_h[:, :, -1].flatten()
-    print(f"{str(dates[-1]):>12}  {last_sa.mean():+10,.0f} "
-          f"[{np.percentile(last_sa, 10):+10,.0f}, {np.percentile(last_sa, 90):+10,.0f}]  "
-          f"{last_nsa.mean():+10,.0f} "
-          f"[{np.percentile(last_nsa, 10):+10,.0f}, {np.percentile(last_nsa, 90):+10,.0f}]  "
-          f"\u2190 last obs")
+    logger.info(
+        "%s",
+        f"{str(dates[-1]):>12}  {last_sa.mean():+10,.0f} "
+        f"[{np.percentile(last_sa, 10):+10,.0f}, {np.percentile(last_sa, 90):+10,.0f}]  "
+        f"{last_nsa.mean():+10,.0f} "
+        f"[{np.percentile(last_nsa, 10):+10,.0f}, {np.percentile(last_nsa, 90):+10,.0f}]  "
+        f"\u2190 last obs",
+    )
 
     for i, fd in enumerate(forecast_dates):
         sa = c_sa_f[:, :, i].flatten()
         nsa = c_nsa_f[:, :, i].flatten()
-        print(f"{str(fd):>12}  {sa.mean():+10,.0f} "
-              f"[{np.percentile(sa, 10):+10,.0f}, {np.percentile(sa, 90):+10,.0f}]  "
-              f"{nsa.mean():+10,.0f} "
-              f"[{np.percentile(nsa, 10):+10,.0f}, {np.percentile(nsa, 90):+10,.0f}]  "
-              f"\u2190 forecast")
+        logger.info(
+            "%s",
+            f"{str(fd):>12}  {sa.mean():+10,.0f} "
+            f"[{np.percentile(sa, 10):+10,.0f}, {np.percentile(sa, 90):+10,.0f}]  "
+            f"{nsa.mean():+10,.0f} "
+            f"[{np.percentile(nsa, 10):+10,.0f}, {np.percentile(nsa, 90):+10,.0f}]  "
+            f"\u2190 forecast",
+        )
 
 
 def _print_growth_table(forecast_dates, g_sa_fwd, g_nsa_fwd):
     """Print console table of forecast monthly growth rates."""
-    print("\n" + "=" * 72)
-    print("FORECAST: Monthly Growth Rates")
-    print("=" * 72)
+    logger.info("")
+    logger.info("=" * 72)
+    logger.info("FORECAST: Monthly Growth Rates")
+    logger.info("=" * 72)
     for i, fd in enumerate(forecast_dates):
         gsa = g_sa_fwd[:, :, i].flatten() * 100
         gnsa = g_nsa_fwd[:, :, i].flatten() * 100
-        print(f"{str(fd):>12}  "
-              f"SA:  {gsa.mean():+.3f}%  "
-              f"[{np.percentile(gsa, 10):+.3f}%, {np.percentile(gsa, 90):+.3f}%]   "
-              f"NSA: {gnsa.mean():+.3f}%  "
-              f"[{np.percentile(gnsa, 10):+.3f}%, {np.percentile(gnsa, 90):+.3f}%]")
+        logger.info(
+            "%s",
+            f"{str(fd):>12}  "
+            f"SA:  {gsa.mean():+.3f}%  "
+            f"[{np.percentile(gsa, 10):+.3f}%, {np.percentile(gsa, 90):+.3f}%]   "
+            f"NSA: {gnsa.mean():+.3f}%  "
+            f"[{np.percentile(gnsa, 10):+.3f}%, {np.percentile(gnsa, 90):+.3f}%]",
+        )
 
 
 # =========================================================================
@@ -283,8 +309,8 @@ def _plot_index_forecast(
                 if mask.sum() > 1:
                     ax.plot(bd_arr[mask][1:], vals[mask][1:], color=pp["color"], lw=1,
                             alpha=0.5, label=f"{pp['name']} (NSA)")
-            except Exception:
-                pass
+            except KeyError:
+                logger.debug("Provider column %s not in levels DataFrame", pp["emp_col"])
 
         if panel_idx == 1:
             qcew_rows = levels.filter(pl.col("qcew_nsa_index").is_not_null())
@@ -304,7 +330,7 @@ def _plot_index_forecast(
     plt.tight_layout()
     fig.savefig(OUTPUT_DIR / "forecast_sa_nsa.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved: {OUTPUT_DIR / 'forecast_sa_nsa.png'}")
+    logger.info("Saved: %s", OUTPUT_DIR / "forecast_sa_nsa.png")
 
 
 def _plot_jobs_forecast(
@@ -387,4 +413,4 @@ def _plot_jobs_forecast(
     plt.tight_layout()
     fig.savefig(OUTPUT_DIR / "forecast_levels.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved: {OUTPUT_DIR / 'forecast_levels.png'}")
+    logger.info("Saved: %s", OUTPUT_DIR / "forecast_levels.png")

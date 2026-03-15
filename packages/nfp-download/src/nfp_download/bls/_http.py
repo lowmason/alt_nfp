@@ -21,15 +21,15 @@ from datetime import date
 from typing import Any
 
 import polars as pl
-import requests
+import httpx
 
 logger = logging.getLogger(__name__)
 
 _USER_AGENT = (
     'alt-nfp/0.1.0 '
     '(Python; +https://github.com/lowmason/alt-nfp) '
-    'requests/{req_version}'
-).format(req_version=requests.__version__)
+    'httpx/{httpx_version}'
+).format(httpx_version=httpx.__version__)
 
 # Programs whose survey reference period is the pay period including
 # the 12th of the month.  Dates for these programs use day=12;
@@ -115,8 +115,7 @@ class BLSHttpClient:
         self.api_key = api_key
         self.cache_dir = cache_dir
         self.cache_ttl = cache_ttl
-        self.session = requests.Session()
-        self.session.headers['User-Agent'] = _USER_AGENT
+        self.session = httpx.Client(headers={'User-Agent': _USER_AGENT}, timeout=60.0)
         self.base_url = self.API_BASE_V2 if api_key else self.API_BASE_V1
 
     # ------------------------------------------------------------------

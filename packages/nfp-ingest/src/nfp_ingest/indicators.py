@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import httpx
 import polars as pl
 
 from nfp_lookups.paths import INDICATORS_DIR
@@ -51,8 +52,8 @@ def read_indicator(
         return None
     try:
         return pl.read_parquet(fpath)
-    except Exception:
-        logger.warning("Failed to read indicator %s from %s", name, fpath)
+    except (OSError, pl.exceptions.ComputeError) as e:
+        logger.warning("Failed to read indicator %s from %s: %s", name, fpath, e)
         return None
 
 
@@ -101,8 +102,8 @@ def download_indicators(
             df = fetch_fred_series(
                 fred_id, start_date=start_date, api_key=api_key,
             )
-        except Exception:
-            logger.exception("Failed to download %s (%s)", name, fred_id)
+        except (httpx.HTTPError, ValueError) as e:
+            logger.exception("Failed to download %s (%s): %s", name, fred_id, e)
             print(f"  FAILED: {name}")
             results[name] = 0
             continue

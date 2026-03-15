@@ -14,13 +14,18 @@ Visualisations produced:
 
 from __future__ import annotations
 
+import logging
+
 import arviz as az
+
+logger = logging.getLogger(__name__)
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from .config import N_HARMONICS, OUTPUT_DIR
+from nfp_lookups.paths import OUTPUT_DIR
+
 from .settings import NowcastConfig
 
 
@@ -108,7 +113,8 @@ def plot_growth_and_seasonal(idata: az.InferenceData, data: dict, cfg: NowcastCo
     _year_axis(ax)
 
     # --- Panel 4: Seasonal pattern (current-year Fourier evaluation) ---
-    K = N_HARMONICS
+    cfg = cfg or NowcastConfig()
+    K = cfg.model.fourier.n_harmonics
     fourier_post = idata.posterior['fourier_coefs_det'].values  # (chains, draws, n_years, 2K)
     last_yr_coefs = fourier_post[:, :, -1, :]  # (chains, draws, 2K)
 
@@ -204,8 +210,8 @@ def plot_reconstructed_index(idata: az.InferenceData, data: dict, cfg: NowcastCo
             if mask.sum() > 1:
                 ax.plot(pp_dates_arr[mask][1:], vals[mask][1:], color=pp["color"], lw=1,
                         alpha=0.6, label=f"{pp['name']} (NSA)")
-        except Exception:
-            pass
+        except KeyError:
+            logger.debug("Provider column %s not in levels DataFrame", pp["emp_col"])
 
     # QCEW — small circles instead of bold diamonds
     qcew_rows = levels.filter(pl.col("qcew_nsa_index").is_not_null())
@@ -272,22 +278,22 @@ def plot_bd_diagnostics(idata: az.InferenceData, data: dict, cfg: NowcastConfig 
     c_phi0 = np.full(len(dates), phi_0_m * 100)
     ax.plot(dates, c_phi0, lw=1.2, label="\u03c6\u2080 (intercept)", color="gray", ls="--")
 
-    # Cyclical contributions (derived from CYCLICAL_INDICATORS config)
-    from .config import CYCLICAL_INDICATORS
+    # Cyclical contributions (derived from cfg.indicators)
+    cfg = cfg or NowcastConfig()
 
     _cyc_colors = ['#9467bd', '#ff7f0e', '#17becf', '#d62728', '#8c564b']
     cyc_contribs = np.zeros(len(dates))
     if "phi_3" in idata.posterior:
         phi_3_m = idata.posterior["phi_3"].values.mean(axis=(0, 1))  # (n_cyc,)
         cyc_i = 0
-        for ci, spec in enumerate(CYCLICAL_INDICATORS):
-            key = f"{spec['name']}_c"
+        for ci, spec in enumerate(cfg.indicators):
+            key = f"{spec.name}_c"
             arr = data.get(key)
             if arr is not None and np.any(arr != 0.0):
                 contrib = phi_3_m[cyc_i] * arr * 100
                 clr = _cyc_colors[ci % len(_cyc_colors)]
                 ax.plot(dates, contrib, lw=1.2,
-                        label=f"\u03c6\u2083\u00b7{spec['name']}", color=clr)
+                        label=f"\u03c6\u2083\u00b7{spec.name}", color=clr)
                 cyc_contribs += contrib
                 cyc_i += 1
 
