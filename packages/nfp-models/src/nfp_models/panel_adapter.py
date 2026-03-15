@@ -7,6 +7,7 @@ build_model(), diagnostics, and plots.
 
 from __future__ import annotations
 
+import logging
 import warnings
 from datetime import date, timedelta
 
@@ -18,6 +19,7 @@ from nfp_ingest.payroll import load_provider_series
 from nfp_lookups.revision_schedules import get_noise_multiplier
 from .settings import NowcastConfig
 
+logger = logging.getLogger(__name__)
 
 def _date_to_era(d: date, breaks: list[date]) -> int:
     """Map a date to its era index using the given era breaks."""
@@ -112,6 +114,7 @@ def panel_to_model_data(
 
     # Unique sorted periods = model calendar
     dates = sorted(national["period"].unique().to_list())
+    date_to_idx = {d: i for i, d in enumerate(dates)}
     T = len(dates)
     month_of_year = np.array([d.month - 1 for d in dates], dtype=int)
     year0 = dates[0].year
@@ -139,8 +142,8 @@ def panel_to_model_data(
         for row in by_period.iter_rows(named=True):
             period = row["period"]
             growth = row["growth"]
-            if period in dates and growth is not None and np.isfinite(growth):
-                out[dates.index(period)] = float(growth)
+            if period in date_to_idx and growth is not None and np.isfinite(growth):
+                out[date_to_idx[period]] = float(growth)
         return out
 
     def _qcew_series_with_meta(
@@ -166,8 +169,8 @@ def panel_to_model_data(
             period = row["period"]
             growth = row["growth"]
             rev = row.get("revision_number")
-            if period in date_list and growth is not None and np.isfinite(growth):
-                idx = date_list.index(period)
+            if period in date_to_idx and growth is not None and np.isfinite(growth):
+                idx = date_to_idx[period]
                 out[idx] = float(growth)
                 period_to_rev[period] = int(rev) if rev is not None else 0
         return out, period_to_rev
@@ -219,8 +222,8 @@ def panel_to_model_data(
             period = row["period"]
             g = row["growth"]
             rev = row.get("revision_number")
-            if period in dates and g is not None and np.isfinite(g):
-                idx = dates.index(period)
+            if period in date_to_idx and g is not None and np.isfinite(g):
+                idx = date_to_idx[period]
                 growth[idx] = float(g)
                 vidx[idx] = int(rev) if rev is not None else 2
         return growth, vidx
@@ -361,15 +364,18 @@ def panel_to_model_data(
         ]
         return ", ".join(parts) if parts else "none"
 
-    print(f"Growth-rate model (v3): T = {T} months ({dates[0]} → {dates[-1]})")
-    print(f"  CES SA:  {len(ces_sa_obs)} monthly obs ({_vintage_dist(ces_sa_vintage_idx_raw)})")
-    print(f"  CES NSA: {len(ces_nsa_obs)} monthly obs ({_vintage_dist(ces_nsa_vintage_idx_raw)})")
+    logger.info("Growth-rate model (v3): T = %s months (%s → %s)", T, dates[0], dates[-1])
+    logger.info("  CES SA:  %s monthly obs (%s)", len(ces_sa_obs), _vintage_dist(ces_sa_vintage_idx_raw))
+    logger.info("  CES NSA: %s monthly obs (%s)", len(ces_nsa_obs), _vintage_dist(ces_nsa_vintage_idx_raw))
     rev_mult_str = ""
     if len(qcew_obs) > 0:
         rev_mult_str = f"; rev mult min={qcew_noise_mult.min():.1f}, max={qcew_noise_mult.max():.1f}"
-    print(
-        f"  QCEW:    {len(qcew_obs)} monthly obs (NSA) — "
-        f"{n_qcew_m2} M2 (mid-quarter), {n_qcew_boundary} M3+M1 (boundary){rev_mult_str}"
+    logger.info(
+        "  QCEW:    %s monthly obs (NSA) — %s M2 (mid-quarter), %s M3+M1 (boundary)%s",
+        len(qcew_obs),
+        n_qcew_m2,
+        n_qcew_boundary,
+        rev_mult_str,
     )
     for pp in pp_data:
         em = pp["config"].error_model
@@ -377,29 +383,34 @@ def panel_to_model_data(
         bstr = ""
         if pp["births"] is not None:
             bstr = f", births: {len(pp['births_obs'])} obs"
-        print(f"  {pp['name']:5}: {n_obs} obs (error: {em}){bstr}")
+        logger.info("  %s: %s obs (error: %s)%s", f"{pp['name']:5}", n_obs, em, bstr)
     _br_mean = float(np.nanmean(birth_rate)) if np.any(np.isfinite(birth_rate)) else 0.0
     _bq_mean = float(np.nanmean(bd_qcew_lagged)) if np.any(np.isfinite(bd_qcew_lagged)) else 0.0
-    print(
-        f"  BD covariates: birth_rate {n_birth} obs "
-        f"(mean={_br_mean * 100:.3f}%), "
-        f"bd_qcew_lagged {n_bd_qcew} obs "
-        f"(L={bd_qcew_lag}mo, mean={_bq_mean * 100:.4f}%)"
+    logger.info(
+        "  BD covariates: birth_rate %s obs (mean=%.3f%%), bd_qcew_lagged %s obs (L=%smo, mean=%.4f%%)",
+        n_birth,
+        _br_mean * 100,
+        n_bd_qcew,
+        bd_qcew_lag,
+        _bq_mean * 100,
     )
     for ind in indicators:
         key = f"{ind.name}_c"
         arr = cyclical.get(key)
         if arr is not None:
             n_nonzero = int(np.sum(arr != 0.0))
-            print(f"  Cyclical {key}: {n_nonzero} obs")
+            logger.info("  Cyclical %s: %s obs", key, n_nonzero)
         else:
-            print(f"  Cyclical {key}: not available")
-    print(f"  CES SA  mean growth: {np.nanmean(g_ces_sa) * 100:+.4f}%/mo")
-    print(f"  CES NSA mean growth: {np.nanmean(g_ces_nsa) * 100:+.4f}%/mo")
+            logger.info("  Cyclical %s: not available", key)
+    logger.info("  CES SA  mean growth: %+0.4f%%/mo", np.nanmean(g_ces_sa) * 100)
+    logger.info("  CES NSA mean growth: %+0.4f%%/mo", np.nanmean(g_ces_nsa) * 100)
     qcew_mean = float(np.nanmean(g_qcew)) if np.any(np.isfinite(g_qcew)) else np.nan
-    print(f"  QCEW    mean growth: {qcew_mean * 100:+.4f}%/mo" if np.isfinite(qcew_mean) else "  QCEW    mean growth: (no obs)")
+    if np.isfinite(qcew_mean):
+        logger.info("  QCEW    mean growth: %+0.4f%%/mo", qcew_mean * 100)
+    else:
+        logger.info("  QCEW    mean growth: (no obs)")
     for pp in pp_data:
-        print(f"  {pp['name']:5} mean growth: {np.nanmean(pp['g_pp']) * 100:+.4f}%/mo")
+        logger.info("  %s mean growth: %+0.4f%%/mo", f"{pp['name']:5}", np.nanmean(pp["g_pp"]) * 100)
 
     return dict(
         panel=panel,
@@ -537,6 +548,7 @@ def _build_levels_from_growth(
     for converting index forecasts to jobs-added estimates.
     """
     T = len(dates)
+    date_to_idx = {d: i for i, d in enumerate(dates)}
     base = 100.0
 
     def cum_level(g: np.ndarray) -> np.ndarray:
@@ -577,8 +589,8 @@ def _build_levels_from_growth(
         for row in sub.iter_rows(named=True):
             period = row["period"]
             level = row["employment_level"]
-            if period in dates and level is not None and np.isfinite(level):
-                out[dates.index(period)] = float(level)
+            if period in date_to_idx and level is not None and np.isfinite(level):
+                out[date_to_idx[period]] = float(level)
         return out
 
     d["ces_sa_level"] = _emp_level_series("ces_sa")

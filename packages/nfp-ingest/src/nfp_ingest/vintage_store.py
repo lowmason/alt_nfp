@@ -376,6 +376,7 @@ def read_vintage_store(
     lf = pl.scan_parquet(
         store_path / "**/*.parquet",
         hive_partitioning=True,
+        schema=VINTAGE_STORE_SCHEMA,
     )
 
     if source is not None:

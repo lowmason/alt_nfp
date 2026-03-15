@@ -9,11 +9,13 @@ If ``BLS_API_KEY`` is set in the environment, it is appended as a
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
 import httpx
 
+logger = logging.getLogger(__name__)
 USER_AGENT = 'Mozilla/5.0 (compatible; alt-nfp/0.1.0)'
 DEFAULT_HEADERS = {
     'User-Agent': USER_AGENT,
@@ -99,7 +101,7 @@ def get_with_retry(
         r = client.get(url, timeout=timeout, params=params)
         if r.status_code == 429 or r.status_code >= 500:
             wait = min(2**attempt, 120)
-            print(f'    [{r.status_code}] retrying in {wait}s ...')
+            logger.warning("    [%s] retrying in %ss ...", r.status_code, wait)
             time.sleep(wait)
             continue
         r.raise_for_status()

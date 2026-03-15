@@ -46,8 +46,8 @@ CELL_REGION: np.ndarray = np.array(_cell_rg, dtype=np.intp)
 
 
 def _months_between(later: date, earlier: date) -> int:
-    """Positive integer months from *earlier* to *later*."""
-    return (later.year - earlier.year) * 12 + (later.month - earlier.month)
+    """Non-negative integer months from *earlier* to *later* (clamped at 0)."""
+    return max(0, (later.year - earlier.year) * 12 + (later.month - earlier.month))
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ def load_qcew_weights(
     })
 
     qcew = (
-        pl.read_parquet(str(store_path), hive_partitioning=True)
+        pl.read_parquet(str(store_path / "**/*.parquet"), hive_partitioning=True)
         .filter(
             pl.col("source") == "qcew",
             pl.col("geographic_type") == "region",
